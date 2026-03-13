@@ -1,0 +1,112 @@
+name: Hive CI
+on:
+  push:
+    branches: [main]
+    paths: ['infra/**']
+  pull_request:
+    branches: [main]
+    paths: ['infra/**']
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Lint operator
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          cd infra/operator
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run ./...
+      - name: Lint worker
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          cd infra/worker
+          golangci-lint run ./...
+      - name: Lint manifests
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go install github.com/yannh/kubeconform/cmd/kubeconform@latest
+          kubeconform -strict -skip Certificate -skip CertificateSigningRequest -skip Ingress infra/manifests/**/*.yaml 2>/dev/null || true
+  test-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Test operator
+        run: |
+          cd infra/operator
+          go test ./... -short -race -count=1 -coverprofile=coverage.out
+      - name: Test worker
+        run: |
+          cd infra/worker
+          go test ./... -short -race -count=1 -coverprofile=coverage.out
+  test-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Integration tests (operator envtest)
+        run: |
+          cd infra/operator
+          go test ./controllers/... -race -count=1
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: gosec operator
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          cd infra/operator && gosec ./... 2>/dev/null || true
+      - name: gosec worker
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          cd infra/worker && gosec ./... 2>/dev/null || true
+      - name: govulncheck
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          cd infra/operator && govulncheck ./... 2>/dev/null || true
+          cd ../worker && govulncheck ./... 2>/dev/null || true
+      - name: go mod verify
+        run: |
+          cd infra/operator && go mod verify
+          cd ../worker && go mod verify
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Build operator
+        run: |
+          cd infra/operator
+          go build -o manager .
+      - name: Build worker
+        run: |
+          cd infra/worker
+          go build -o hive-worker ./cmd/worker
+      - name: Docker build operator
+        run: |
+          docker build -t hive-operator:latest infra/operator
+      - name: Docker build worker
+        run: |
+          docker build -t hive-worker:latest infra/worker
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'hive-operator:latest'
+          format: 'table'
+          exit-code: '0'
+        continue-on-error: true

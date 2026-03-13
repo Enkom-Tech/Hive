@@ -1,0 +1,49 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hiveclusters.hive.io
+spec:
+  group: hive.io
+  names:
+    kind: HiveCluster
+    listKind: HiveClusterList
+    plural: hiveclusters
+    singular: hivecluster
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [controlPlaneUrl, provisionerSecret]
+              properties:
+                controlPlaneUrl:
+                  type: string
+                  format: uri
+                provisionerSecret:
+                  type: string
+                defaultNodeSelector:
+                  type: object
+                  additionalProperties:
+                    type: string
+            status:
+              type: object
+              properties:
+                connected:
+                  type: boolean
+                lastSyncAt:
+                  type: string
+                apiVersion:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}

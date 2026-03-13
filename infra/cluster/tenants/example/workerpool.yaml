@@ -1,0 +1,11 @@
+apiVersion: hive.io/v1alpha1
+kind: HiveWorkerPool
+metadata:
+  name: example-workers
+  namespace: hive-system
+spec:
+  companyRef: example
+  replicas: 1
+  workerImage: hive-worker:latest
+  nodeSelector:
+    hive.io/location: cloud

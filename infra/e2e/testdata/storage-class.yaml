@@ -1,0 +1,8 @@
+# E2E only: StorageClass named juicefs-sc so company PVC can bind.
+# k3d has local-path provisioner by default; Kind may need local-path-provisioner installed first.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-sc
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer

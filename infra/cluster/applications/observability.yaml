@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hive-observability
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/prometheus-community/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: v82.10.3
+    helm:
+      values: |
+        prometheus:
+          prometheusSpec:
+            retention: 7d
+        grafana:
+          enabled: true
+        defaultRules:
+          create: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

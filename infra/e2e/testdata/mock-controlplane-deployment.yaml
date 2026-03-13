@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: provisioner-token
+  namespace: hive-system
+stringData:
+  token: "e2e-test-token"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-controlplane
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-controlplane
+  template:
+    metadata:
+      labels:
+        app: mock-controlplane
+    spec:
+      containers:
+        - name: mock
+          image: mock-controlplane:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-controlplane
+  namespace: default
+spec:
+  selector:
+    app: mock-controlplane
+  ports:
+    - port: 8080
+      targetPort: 8080

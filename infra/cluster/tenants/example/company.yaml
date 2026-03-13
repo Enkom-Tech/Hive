@@ -1,0 +1,11 @@
+apiVersion: hive.io/v1alpha1
+kind: HiveCompany
+metadata:
+  name: example
+  namespace: hive-system
+spec:
+  companyId: "550e8400-e29b-41d4-a716-446655440000"
+  storageClass: juicefs-sc
+  storageSize: 10Gi
+  cpuQuota: "10"
+  memoryQuota: "20Gi"

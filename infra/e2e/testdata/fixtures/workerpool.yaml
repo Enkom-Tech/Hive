@@ -1,0 +1,9 @@
+apiVersion: hive.io/v1alpha1
+kind: HiveWorkerPool
+metadata:
+  name: test-pool
+  namespace: hive-system
+spec:
+  companyRef: test-company
+  replicas: 1
+  workerImage: hive-worker:latest

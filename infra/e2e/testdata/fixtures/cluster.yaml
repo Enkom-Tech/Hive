@@ -1,0 +1,7 @@
+apiVersion: hive.io/v1alpha1
+kind: HiveCluster
+metadata:
+  name: hive-cluster
+spec:
+  controlPlaneUrl: http://mock-controlplane.default.svc.cluster.local:8080
+  provisionerSecret: provisioner-token

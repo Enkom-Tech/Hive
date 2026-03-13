@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: metrics-server
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: metrics-server
+    targetRevision: 6.3.0
+    helm:
+      values: |
+        # Defaults are sufficient for most clusters.
+        # Add args (e.g. --kubelet-insecure-tls) or resources if needed.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

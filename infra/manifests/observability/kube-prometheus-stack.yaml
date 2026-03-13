@@ -1,0 +1,14 @@
+# Minimal values for kube-prometheus-stack Helm chart
+# Full options: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    resources:
+      requests:
+        memory: 400Mi
+        cpu: 100m
+grafana:
+  enabled: true
+  adminPassword: admin
+defaultRules:
+  create: true

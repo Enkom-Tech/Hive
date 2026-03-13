@@ -1,0 +1,8 @@
+# JuiceFS CSI driver is typically installed via Helm:
+# helm repo add juicefs https://juicedata.github.io/charts
+# helm install juicefs-csi juicefs/juicefs-csi-driver -n kube-system -f juicefs-csi-values.yaml
+# This file is a placeholder; use the official JuiceFS CSI Helm chart for production.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-system
