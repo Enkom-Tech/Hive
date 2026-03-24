@@ -1,0 +1,25 @@
+# Hive in Docker with PostgreSQL you run elsewhere (host machine, LAN, or cloud).
+# Requires DATABASE_URL reachable from inside the container (see doc/DOCKER.md).
+services:
+  hive:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${HIVE_PORT:-3100}:3100"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3100"
+      HIVE_HOME: "/hive"
+      SERVE_UI: "true"
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL must be set}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      HIVE_DEPLOYMENT_MODE: "authenticated"
+      HIVE_DEPLOYMENT_EXPOSURE: "private"
+      HIVE_PUBLIC_URL: "${HIVE_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+    volumes:
+      - "${HIVE_DATA_DIR:-./data/docker-hive}:/hive"

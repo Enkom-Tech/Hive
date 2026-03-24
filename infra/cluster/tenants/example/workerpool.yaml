@@ -9,3 +9,5 @@ spec:
   workerImage: hive-worker:latest
   nodeSelector:
     hive.io/location: cloud
+  # Optional: single OpenAI-compatible URL for LLM inference (model gateway).
+  # modelGatewayURL: "http://model-gateway.default.svc.cluster.local:8080/v1"

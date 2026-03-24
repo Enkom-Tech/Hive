@@ -1,0 +1,9 @@
+# actionlint config: allow custom workflow secrets and path-specific ignores.
+# See https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+# Allowlist of custom repository secrets (avoids "property X is not defined" in expressions).
+# actionlint does not have a dedicated secrets allowlist; we ignore that check for these names.
+paths:
+  .github/workflows/*.yml:
+    ignore:
+      - 'property "ANTHROPIC_API_KEY" is not defined.+'

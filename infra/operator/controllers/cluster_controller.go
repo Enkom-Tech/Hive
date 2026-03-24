@@ -12,8 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	hivev1alpha1 "github.com/enkom/hive-operator/api/v1alpha1"
-	"github.com/enkom/hive-operator/internal/controlplane"
+	hivev1alpha1 "github.com/Enkom-Tech/hive-operator/api/v1alpha1"
+	"github.com/Enkom-Tech/hive-operator/internal/controlplane"
 )
 
 const provisionerSecretNamespace = "hive-system"

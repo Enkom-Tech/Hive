@@ -1,3 +1,5 @@
+releases/
+infra/worker/dist/
 # Go
 *.exe
 *.exe~
@@ -40,3 +42,14 @@ temp/
 .k3d/
 
 .plans/
+.cursor/plans/
+.cursor/
+.agents/
+.windsurf/
+.trae/
+.claude/
+.roo/
+.roomodes
+.changeset/
+control-plane/agents/
+skills-lock.json

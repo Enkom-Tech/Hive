@@ -1,0 +1,81 @@
+name: Control plane Refresh Lockfile
+
+on:
+  push:
+    branches: [main]
+    paths: ['control-plane/**']
+  workflow_dispatch:
+
+concurrency:
+  group: control-plane-refresh-lockfile-main
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: control-plane/pnpm-lock.yaml
+
+      - name: Refresh pnpm lockfile
+        run: cd control-plane && pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile
+
+      - name: Fail on unexpected file changes
+        run: |
+          changed="$(git status --porcelain)"
+          if [ -z "$changed" ]; then
+            echo "Lockfile is already up to date."
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -Fvq 'control-plane/pnpm-lock.yaml'; then
+            echo "Unexpected files changed during lockfile refresh:"
+            echo "$changed"
+            exit 1
+          fi
+
+      - name: Create or update pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- control-plane/pnpm-lock.yaml; then
+            echo "Lockfile unchanged, nothing to do."
+            exit 0
+          fi
+
+          BRANCH="chore/refresh-lockfile"
+          git config user.name "lockfile-bot"
+          git config user.email "lockfile-bot@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          git add control-plane/pnpm-lock.yaml
+          git commit -m "chore(lockfile): refresh control-plane pnpm-lock.yaml"
+          git push --force origin "$BRANCH"
+
+          existing=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')
+          if [ -z "$existing" ]; then
+            gh pr create \
+              --head "$BRANCH" \
+              --title "chore(lockfile): refresh control-plane pnpm-lock.yaml" \
+              --body "Auto-generated lockfile refresh after dependencies changed on main. This PR only updates control-plane/pnpm-lock.yaml."
+            echo "Created new PR."
+          else
+            echo "PR #$existing already exists, branch updated via force push."
+          fi

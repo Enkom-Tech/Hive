@@ -1,0 +1,51 @@
+# Optional: vLLM Deployment + Service for in-cluster LLM inference.
+# Apply when following control-plane/doc/K3S-LLM-DEPLOYMENT.md. Not managed by ArgoCD app-of-apps by default.
+# For GPU nodes: set nodeSelector gpu: "true" and resources.limits nvidia.com/gpu: "1".
+# For CPU-only: remove nodeSelector and nvidia.com/gpu limit (vLLM will run on CPU).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-llama
+  labels:
+    app: vllm-llama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-llama
+  template:
+    metadata:
+      labels:
+        app: vllm-llama
+    spec:
+      # nodeSelector:
+      #   gpu: "true"
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model"
+            - "meta-llama/Meta-Llama-3-8B-Instruct"
+            - "--port"
+            - "8000"
+            - "--max-model-len"
+            - "32768"
+          # resources:
+          #   limits:
+          #     nvidia.com/gpu: "1"
+          ports:
+            - containerPort: 8000
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-llama
+spec:
+  selector:
+    app: vllm-llama
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http

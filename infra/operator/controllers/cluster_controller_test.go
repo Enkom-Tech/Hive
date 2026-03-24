@@ -14,9 +14,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	hivev1alpha1 "github.com/enkom/hive-operator/api/v1alpha1"
-	"github.com/enkom/hive-operator/internal/testutil"
+	hivev1alpha1 "github.com/Enkom-Tech/hive-operator/api/v1alpha1"
+	"github.com/Enkom-Tech/hive-operator/internal/testutil"
 )
 
 var _ = Describe("Cluster controller", func() {
@@ -39,8 +40,8 @@ var _ = Describe("Cluster controller", func() {
 		defer srv.Close()
 
 		mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-			Scheme:             testScheme,
-			MetricsBindAddress: "0",
+			Scheme:  testScheme,
+			Metrics: metricsserver.Options{BindAddress: "0"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect((&HiveClusterReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr)).To(Succeed())
@@ -54,7 +55,7 @@ var _ = Describe("Cluster controller", func() {
 		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
 		Expect(k8sClient.Create(ctx, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "prov"},
-			Data:      map[string][]byte{"token": []byte("t")},
+			Data:       map[string][]byte{"token": []byte("t")},
 		})).To(Succeed())
 
 		cluster := testutil.HiveClusterFixture("cluster1", srv.URL, "prov")
@@ -71,8 +72,8 @@ var _ = Describe("Cluster controller", func() {
 
 	It("sets Connected=false when control plane is unreachable", func() {
 		mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-			Scheme:             testScheme,
-			MetricsBindAddress: "0",
+			Scheme:  testScheme,
+			Metrics: metricsserver.Options{BindAddress: "0"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect((&HiveClusterReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr)).To(Succeed())

@@ -1,0 +1,51 @@
+name: Drone worker container smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/worker/**"
+      - "control-plane/server/**"
+      - "control-plane/packages/**"
+      - ".github/workflows/drone-container-smoke.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/worker/**"
+      - "control-plane/server/**"
+      - "control-plane/packages/**"
+      - ".github/workflows/drone-container-smoke.yml"
+
+concurrency:
+  group: drone-container-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infra/worker/go.mod
+          cache-dependency-path: infra/worker/go.sum
+
+      - name: Go provision tests
+        working-directory: infra/worker
+        run: go test ./internal/provision/... -count=1
+
+      - name: Docker build hive-worker
+        run: docker build -t hive-worker:ci -f infra/worker/Dockerfile infra/worker
+
+      - name: Validate drone compose file
+        run: docker compose -f infra/worker/docker-compose.drone.yml config --quiet
+
+      - name: Worker stays up without control plane (timeout = success)
+        run: |
+          set +e
+          timeout 15s docker run --rm -e HIVE_CONTROL_PLANE_URL=https://127.0.0.1:59999 hive-worker:ci
+          code=$?
+          set -e
+          test "$code" -eq 124

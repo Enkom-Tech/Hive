@@ -1,0 +1,58 @@
+name: Control plane PR E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['control-plane/**']
+
+concurrency:
+  group: control-plane-pr-e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: control-plane
+    env:
+      HIVE_E2E_SKIP_LLM: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: control-plane/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E (onboarding)
+        run: pnpm run test:e2e:onboarding
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-pr
+          path: |
+            control-plane/tests/e2e/playwright-report/
+            control-plane/tests/e2e/test-results/
+          retention-days: 7

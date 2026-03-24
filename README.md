@@ -59,14 +59,15 @@ Or from `infra/`: `cd infra && make ci` (same targets). E2E is not run in CI; us
 
 ## Layout
 
-- `infra/` – Hive cluster infrastructure:
+- **`control-plane/`** – Hive API and UI (Node.js, pnpm). REST API for companies, agents, keys; React dashboard; CLI (`hive`). The operator talks to this API. Run locally: `make control-plane-dev` or `cd control-plane && pnpm dev`. See [control-plane/README.md](control-plane/README.md). To point the operator at your local control plane, set `HiveCluster.spec.controlPlaneURL` (e.g. `http://host.docker.internal:3100` when the operator runs in Docker).
+- **`infra/`** – Hive cluster infrastructure:
   - `operator/` – Go kubebuilder operator (HiveCluster, HiveCompany, HiveWorkerPool CRDs)
   - `worker/` – Go HTTP worker image (/run, /health, /metrics)
   - `e2e/` – E2E tests (k3d cluster, mock control plane)
   - `manifests/` – CRDs, storage (MinIO, Dragonfly, JuiceFS), operator Deployment, observability
   - `cluster/` – GitOps: bootstrap (ArgoCD app-of-apps), applications (operator, storage, observability, metrics-server), tenants/example
   - `scripts/` – install-wsl2-toolchain.sh, bootstrap-vps.sh, join-desktop.sh, create-tenant.sh, format-juicefs.sh
-- `.github/workflows/` – CI (hive-ci.yml)
+- `.github/workflows/` – CI: [hive-ci.yml](.github/workflows/hive-ci.yml) (infra), [control-plane-ci.yml](.github/workflows/control-plane-ci.yml) (control-plane)
 
 ## Docs
 

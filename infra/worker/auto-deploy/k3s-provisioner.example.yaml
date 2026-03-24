@@ -1,0 +1,27 @@
+# Example: Job that populates a shared volume before hive-worker Deployment mounts it read-only.
+# Replace `your-provisioner-image` and script with logic that uses the same manifest JSON as hive-worker.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hive-drone-provision-cache
+spec:
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: prov-cache
+          emptyDir: {}
+      containers:
+        - name: provision
+          image: your-provisioner-image:latest
+          volumeMounts:
+            - name: prov-cache
+              mountPath: /cache
+          env:
+            - name: HIVE_PROVISION_CACHE_DIR
+              value: /cache
+          # command: ["./install-adapters-from-manifest.sh"]
+---
+# Worker Deployment would mount `prov-cache` (or a PVC populated by the Job) at /cache,
+# set HIVE_PROVISION_CACHE_DIR=/cache, HIVE_PROVISION_MANIFEST_HOOKS=0, and link credentials per board.

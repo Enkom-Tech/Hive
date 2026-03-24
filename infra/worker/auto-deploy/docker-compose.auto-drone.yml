@@ -1,0 +1,33 @@
+# Reference stack aligned with GET /api/companies/{id}/drone-auto-deploy/profile
+# (same contract as ../docker-compose.drone.yml; copy ../.env.drone.example → ../.env.drone).
+#
+#   docker compose -f docker-compose.auto-drone.yml --env-file ../.env.drone up -d
+#
+# For an init Job / one-shot provisioner before worker, use the pattern in k3s-provisioner.example.yaml
+# or Compose depends_on + completed_successfully with your own provisioner image.
+
+services:
+  hive-worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: hive-worker:local
+    restart: unless-stopped
+    env_file:
+      - ../.env.drone
+    environment:
+      HIVE_WORKER_HTTP_ADDR: ${HIVE_WORKER_HTTP_ADDR:-:8080}
+      HIVE_PROVISION_CACHE_DIR: /cache
+      HIVE_PROVISION_MANIFEST_HOOKS: ${HIVE_PROVISION_MANIFEST_HOOKS:-0}
+    ports:
+      - "${HIVE_WORKER_PUBLISH_PORT:-8080}:8080"
+    volumes:
+      - hive-worker-state:/state
+      - hive-worker-workspace:/workspace/repo
+      - hive-worker-cache:/cache
+    user: "65532:65532"
+
+volumes:
+  hive-worker-state:
+  hive-worker-workspace:
+  hive-worker-cache:

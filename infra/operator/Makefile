@@ -44,13 +44,13 @@ test: test-unit test-integration
 
 .PHONY: generate
 generate:
-	@test -x $(GOBIN)/controller-gen || go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.13.0
+	@test -x $(GOBIN)/controller-gen || go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.15.0
 	$(GOBIN)/controller-gen object:headerFile=hack/boilerplate.go.txt paths="./..."
 	$(GOBIN)/controller-gen crd webhook rbac:roleName=manager-role output:crd:artifacts:config=config/crd/bases
 
 .PHONY: manifests
 manifests:
-	@test -x $(GOBIN)/controller-gen || go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.13.0
+	@test -x $(GOBIN)/controller-gen || go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.15.0
 	$(GOBIN)/controller-gen crd webhook rbac:roleName=manager-role output:crd:artifacts:config=config/crd/bases
 
 .PHONY: docker-build

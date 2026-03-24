@@ -1,12 +1,12 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: hive-infra
+  name: hive
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: https://github.com/enkom/paperclip
+    repoURL: https://github.com/Enkom-Tech/Hive
     path: infra/cluster/applications
     targetRevision: HEAD
   destination:

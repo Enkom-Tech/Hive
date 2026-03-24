@@ -13,8 +13,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/enkom/hive-operator/internal/testutil"
+	"github.com/Enkom-Tech/hive-operator/internal/testutil"
 )
 
 var _ = Describe("Company controller", func() {
@@ -34,8 +35,8 @@ var _ = Describe("Company controller", func() {
 
 	It("creates namespace, PVC, ResourceQuota, and NetworkPolicy when HiveCompany is created", func() {
 		mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-			Scheme:             testScheme,
-			MetricsBindAddress: "0",
+			Scheme:  testScheme,
+			Metrics: metricsserver.Options{BindAddress: "0"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect((&HiveCompanyReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr)).To(Succeed())
@@ -84,8 +85,8 @@ var _ = Describe("Company controller", func() {
 
 	It("cleans up namespace when HiveCompany is deleted", func() {
 		mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-			Scheme:             testScheme,
-			MetricsBindAddress: "0",
+			Scheme:  testScheme,
+			Metrics: metricsserver.Options{BindAddress: "0"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect((&HiveCompanyReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr)).To(Succeed())

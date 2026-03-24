@@ -18,6 +18,7 @@ type HiveWorkerPoolSpec struct {
 	Replicas int32 `json:"replicas"`
 
 	// WorkerImage is the container image for the worker (e.g. ghcr.io/enkom/hive-worker:latest).
+	// Prefer an immutable digest reference (image@sha256:...) for reproducible deploys; the controller uses PullIfNotPresent for digests and PullAlways for mutable tags.
 	// +kubebuilder:validation:Required
 	WorkerImage string `json:"workerImage"`
 
@@ -36,6 +37,11 @@ type HiveWorkerPoolSpec struct {
 	// AdapterConfig holds extra HTTP adapter config keys (merged with url set by operator).
 	// +optional
 	AdapterConfig map[string]string `json:"adapterConfig,omitempty"`
+
+	// ModelGatewayURL is the OpenAI-compatible base URL for LLM inference (e.g. model gateway).
+	// When set, the worker receives HIVE_MODEL_GATEWAY_URL so agents use this endpoint.
+	// +optional
+	ModelGatewayURL string `json:"modelGatewayURL,omitempty"`
 }
 
 // HiveWorkerPoolStatus defines the observed state of HiveWorkerPool.

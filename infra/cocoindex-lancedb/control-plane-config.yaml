@@ -1,0 +1,218 @@
+## 6. control-plane config.yaml snippet (LanceDB endpoint)
+# Add this to your Hive control-plane configuration to enable
+# CocoIndex/LanceDB as a searchable source for agents
+
+---
+# -----------------------------------------------------------------------------
+# Control Plane Configuration - CocoIndex Integration
+# -----------------------------------------------------------------------------
+# Add this section to your control-plane config.yaml
+
+# -----------------------------------------------------------------------------
+# Data Sources Configuration
+# -----------------------------------------------------------------------------
+dataSources:
+  # LanceDB vector database for code search
+  lancedb:
+    type: vectordb
+    provider: lancedb
+    enabled: true
+    
+    # Connection settings
+    connection:
+      # For Docker Compose setup:
+      uri: "http://localhost:8890"
+      
+      # For K8s setup:
+      # uri: "http://lancedb.cocoindex.svc.cluster.local:8000"
+      
+      table: "code_embeddings"
+      dimension: 4096
+      metric: "cosine"
+    
+    # Authentication (if enabled)
+    auth:
+      type: none
+      # type: bearer
+      # token: "${LANCEDB_API_TOKEN}"
+    
+    # Query configuration
+    query:
+      defaultLimit: 10
+      maxLimit: 100
+      minScore: 0.7  # Minimum similarity score
+    
+    # Indexing configuration
+    indexing:
+      enabled: true
+      endpoint: "http://localhost:8080/index"
+      # For K8s:
+      # endpoint: "http://cocoindex-api.cocoindex.svc.cluster.local:8080/index"
+      
+      # Webhook for index completion notifications
+      webhook:
+        enabled: true
+        url: "http://localhost:3100/api/webhooks/index-complete"
+        secret: "${WEBHOOK_SECRET}"
+
+# -----------------------------------------------------------------------------
+# Embedding Provider Configuration
+# -----------------------------------------------------------------------------
+embeddingProviders:
+  # llama.cpp with Qwen3-Embedding-8B
+  llama-cpp-qwen3:
+    type: llama.cpp
+    enabled: true
+    
+    # Server connection
+    endpoint: "http://localhost:8081"
+    # For K8s:
+    # endpoint: "http://llama-embeddings.cocoindex.svc.cluster.local:8080"
+    
+    # Model configuration
+    model:
+      name: "qwen3-embedding-8b-Q4_K_M"
+      dimensions: 4096
+      maxContextLength: 32768
+      pooling: mean
+      normalize: true  # L2 normalization for cosine similarity
+    
+    # Request configuration
+    request:
+      timeout: 300  # seconds
+      batchSize: 32
+      retryAttempts: 3
+
+# -----------------------------------------------------------------------------
+# MCP (Model Context Protocol) Servers
+# -----------------------------------------------------------------------------
+mcpServers:
+  # CocoIndex code search MCP server
+  cocoindex:
+    enabled: true
+    name: "CocoIndex Code Search"
+    description: "Search indexed code repositories using vector similarity"
+    
+    transport:
+      type: http
+      endpoint: "http://localhost:8080/mcp"
+      # For K8s:
+      # endpoint: "http://cocoindex-api.cocoindex.svc.cluster.local:8080/mcp"
+    
+    tools:
+      - name: "search_code"
+        description: "Search for code snippets similar to a query"
+        parameters:
+          - name: "query"
+            type: string
+            description: "The search query (natural language or code)"
+            required: true
+          - name: "repo"
+            type: string
+            description: "Filter by repository name"
+            required: false
+          - name: "language"
+            type: string
+            description: "Filter by programming language"
+            required: false
+          - name: "limit"
+            type: integer
+            description: "Maximum number of results (1-100)"
+            default: 10
+      
+      - name: "index_repository"
+        description: "Trigger indexing of a repository"
+        parameters:
+          - name: "repo_path"
+            type: string
+            description: "Path to the repository"
+            required: true
+          - name: "force"
+            type: boolean
+            description: "Force reindex even if unchanged"
+            default: false
+      
+      - name: "get_index_stats"
+        description: "Get indexing statistics"
+        parameters: []
+
+# -----------------------------------------------------------------------------
+# Agent Configuration
+# -----------------------------------------------------------------------------
+agents:
+  # Default RAG agent with CocoIndex integration
+  rag-cocoindex:
+    enabled: true
+    name: "Code Search Agent"
+    description: "Agent specialized in searching code repositories"
+    
+    # System prompt template
+    systemPrompt: |
+      You are a code search assistant with access to indexed repositories.
+      Use the search_code tool to find relevant code snippets.
+      Always cite the source file and line numbers when referencing code.
+      
+      When searching:
+      1. Try specific technical terms first
+      2. If no results, try broader queries
+      3. Consider the programming language context
+    
+    # Available tools
+    tools:
+      - "cocoindex.search_code"
+      - "cocoindex.index_repository"
+      - "cocoindex.get_index_stats"
+    
+    # RAG configuration
+    rag:
+      enabled: true
+      dataSource: "lancedb"
+      embeddingProvider: "llama-cpp-qwen3"
+      
+      # Retrieval configuration
+      retrieval:
+        topK: 10
+        minScore: 0.7
+        rerank: true
+        rerankModel: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+      
+      # Context assembly
+      context:
+        maxTokens: 4000
+        includeMetadata: true
+        format: "code_blocks"
+
+# -----------------------------------------------------------------------------
+# Webhooks
+# -----------------------------------------------------------------------------
+webhooks:
+  cocoindex-events:
+    enabled: true
+    secret: "${WEBHOOK_SECRET}"
+    events:
+      - "indexing.complete"
+      - "indexing.error"
+      - "search.query"
+    handlers:
+      - url: "http://localhost:3100/api/webhooks/cocoindex"
+        method: POST
+
+# -----------------------------------------------------------------------------
+# Security
+# -----------------------------------------------------------------------------
+security:
+  cors:
+    allowedOrigins:
+      - "http://localhost:3000"
+      - "http://localhost:3100"
+      - "http://cocoindex.local"
+    allowedMethods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    allowedHeaders:
+      - "Authorization"
+      - "Content-Type"
+      - "X-Requested-With"

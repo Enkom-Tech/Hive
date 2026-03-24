@@ -16,7 +16,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	hivev1alpha1 "github.com/enkom/hive-operator/api/v1alpha1"
+	hivev1alpha1 "github.com/Enkom-Tech/hive-operator/api/v1alpha1"
 )
 
 // testScheme is a scheme with core K8s types and hive v1alpha1; use for manager and client in tests.

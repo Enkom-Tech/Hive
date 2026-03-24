@@ -1,3 +1,3 @@
-module github.com/enkom/hive-e2e/mock-controlplane
+module github.com/Enkom-Tech/hive-e2e/mock-controlplane
 
 go 1.26.1

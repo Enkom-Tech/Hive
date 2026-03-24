@@ -17,6 +17,14 @@ spec:
       containers:
         - name: dragonfly
           image: dragonflydb/dragonfly:latest
+          args:
+            - "--requirepass=$(DFLY_PASSWORD)"
+          env:
+            - name: DFLY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dragonfly-auth
+                  key: password
           ports:
             - containerPort: 6379
           resources:

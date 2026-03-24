@@ -1,0 +1,50 @@
+# Optional: LM Studio proxy for SSH reverse-tunneled desktop.
+# From desktop run: ssh -R 127.0.0.1:1234:127.0.0.1:1234 user@vps
+# The tunnel listens on the VPS host at 127.0.0.1:1234. This Deployment runs on the k3s server
+# node with hostNetwork so it can forward to the host's 127.0.0.1:1234. The Service exposes it
+# so in-cluster model gateway can use http://lmstudio-proxy:1234/v1.
+# Set NODE_NAME to the node where the SSH tunnel runs (typically the k3s server).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lmstudio-proxy
+  labels:
+    app: lmstudio-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lmstudio-proxy
+  template:
+    metadata:
+      labels:
+        app: lmstudio-proxy
+    spec:
+      hostNetwork: true
+      # Pin to the node where the SSH tunnel runs (k3s server). Set to your server node name.
+      nodeSelector:
+        kubernetes.io/hostname: k3s-server
+      containers:
+        - name: proxy
+          image: alpine/socat
+          args:
+            - "TCP-LISTEN:12345,fork,reuseaddr"
+            - "TCP:127.0.0.1:1234"
+          ports:
+            - containerPort: 12345
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lmstudio-proxy
+  labels:
+    app: lmstudio-proxy
+spec:
+  selector:
+    app: lmstudio-proxy
+  ports:
+    - port: 1234
+      targetPort: 12345
+      name: http

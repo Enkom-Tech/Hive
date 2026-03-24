@@ -1,0 +1,64 @@
+{
+  "name": "hive",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev-runner.mjs watch",
+    "dev:watch": "node scripts/dev-runner.mjs watch",
+    "dev:once": "node scripts/dev-runner.mjs dev",
+    "dev:server": "pnpm --filter @hive/server dev",
+    "dev:ui": "pnpm --filter @hive/ui dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "npx vitest",
+    "test:run": "npx vitest run",
+    "test:coverage": "npx vitest run --coverage",
+    "db:generate": "pnpm --filter @hive/db generate",
+    "db:migrate": "pnpm --filter @hive/db migrate",
+    "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",
+    "generate:env-example": "pnpm --filter @hive/shared generate:env-example",
+    "db:backup": "./scripts/backup-db.sh",
+    "hive": "node node_modules/tsx/dist/cli.mjs cli/src/index.ts",
+    "build:npm": "./scripts/build-npm.sh",
+    "release:start": "./scripts/release-start.sh",
+    "release": "./scripts/release.sh",
+    "release:preflight": "./scripts/release-preflight.sh",
+    "release:github": "./scripts/create-github-release.sh",
+    "release:rollback": "./scripts/rollback-latest.sh",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "check:tokens": "node scripts/check-forbidden-tokens.mjs",
+    "check:legacy-drone-api": "node scripts/check-legacy-drone-api.mjs",
+    "doc:export-avatar-pngs": "node scripts/export-avatar-pngs.mjs",
+    "docs:dev": "cd docs && npx mintlify dev",
+    "test:e2e": "npx playwright test --config tests/e2e/playwright.config.ts",
+    "test:e2e:headed": "npx playwright test --config tests/e2e/playwright.config.ts --headed",
+    "test:e2e:onboarding": "npx playwright test tests/e2e/onboarding.spec.ts --config tests/e2e/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.30.0",
+    "cross-env": "^10.1.0",
+    "@playwright/test": "^1.58.2",
+    "@types/express": "^5.0.6",
+    "@types/express-serve-static-core": "^5.1.1",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.5.0",
+    "@types/supertest": "^7.2.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.27.4",
+    "sharp": "^0.34.5",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp"
+    ]
+  }
+}

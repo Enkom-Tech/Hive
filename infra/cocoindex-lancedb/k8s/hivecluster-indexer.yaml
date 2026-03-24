@@ -1,0 +1,300 @@
+## 5. Hive manifests: hivecluster-indexer.yaml (CRD example)
+# This CRD integrates CocoIndex as a searchable source into Hive
+
+---
+# -----------------------------------------------------------------------------
+# HiveCluster CRD for CocoIndex Integration
+# -----------------------------------------------------------------------------
+apiVersion: hive.io/v1alpha1
+kind: HiveCluster
+metadata:
+  name: cocoindex-cluster
+  namespace: cocoindex
+  labels:
+    app: cocoindex
+    component: indexer
+spec:
+  # -----------------------------------------------------------------------------
+  # Control Plane Connection
+  # -----------------------------------------------------------------------------
+  controlPlane:
+    endpoint: "http://hive-control-plane.hive-system.svc.cluster.local:3100"
+    tokenSecretRef:
+      name: hive-control-plane-token
+      key: token
+    tls:
+      enabled: false
+      skipVerify: true  # For local dev only
+  
+  # -----------------------------------------------------------------------------
+  # Vector Storage: LanceDB
+  # -----------------------------------------------------------------------------
+  storage:
+    type: lancedb
+    endpoint: "http://lancedb.cocoindex.svc.cluster.local:8000"
+    persistentVolumeClaim:
+      name: lancedb-pvc
+      storageClass: local-lancedb
+    backup:
+      enabled: true
+      schedule: "0 2 * * *"  # Daily at 2 AM
+      retentionDays: 30
+  
+  # -----------------------------------------------------------------------------
+  # Embeddings: llama.cpp with Qwen3-Embedding-8B
+  # -----------------------------------------------------------------------------
+  embedding:
+    type: llama.cpp
+    endpoint: "http://llama-embeddings.cocoindex.svc.cluster.local:8080"
+    model: 
+      name: "qwen3-embedding-8b-Q4_K_M.gguf"
+      source: "huggingface"
+      repo: "Qwen/Qwen3-Embedding-8B-GGUF"
+      file: "qwen3-embedding-8b-Q4_K_M.gguf"
+    dimensions: 4096
+    maxContextLength: 32768
+    pooling: mean
+    batchSize: 512
+    normalize: true  # L2 normalization
+  
+  # -----------------------------------------------------------------------------
+  # Indexing Configuration
+  # -----------------------------------------------------------------------------
+  indexing:
+    # Repository paths to index
+    repoPath: "/data/repos"
+    
+    # Enable file system watching for incremental updates
+    watchRepos: true
+    
+    # Auto-index on startup and on repo changes
+    autoIndex: true
+    
+    # Languages to index (tree-sitter parsers)
+    languages:
+      - python
+      - javascript
+      - typescript
+      - rust
+      - go
+      - java
+    
+    # Chunking configuration
+    chunking:
+      chunkSize: 512
+      chunkOverlap: 64
+      strategy: "semantic"  # semantic, fixed, or hybrid
+    
+    # Incremental indexing based on file hashes
+    incremental:
+      enabled: true
+      hashAlgorithm: "sha256"
+    
+    # File patterns to include/exclude
+    include:
+      - "**/*.py"
+      - "**/*.js"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.rs"
+      - "**/*.go"
+      - "**/*.java"
+    exclude:
+      - "**/node_modules/**"
+      - "**/.git/**"
+      - "**/__pycache__/**"
+      - "**/vendor/**"
+      - "**/target/**"
+      - "**/dist/**"
+      - "**/build/**"
+      - "**/*.min.js"
+      - "**/*.min.css"
+
+  # -----------------------------------------------------------------------------
+  # Worker Pool Configuration
+  # -----------------------------------------------------------------------------
+  workerPool:
+    name: cocoindex-workers
+    replicas: 2
+    
+    # Pod resources
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2"
+      limits:
+        memory: "8Gi"
+        cpu: "4"
+    
+    # Node selector for GPU nodes (if using CUDA)
+    nodeSelector:
+      kubernetes.io/hostname: k3d-hive-cocoindex-agent-0
+    
+    # Tolerations for GPU nodes
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Affinity rules
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - cocoindex
+              topologyKey: kubernetes.io/hostname
+
+---
+# -----------------------------------------------------------------------------
+# HiveCompany CRD for Tenant Isolation
+# -----------------------------------------------------------------------------
+apiVersion: hive.io/v1alpha1
+kind: HiveCompany
+metadata:
+  name: dev-team-cocoindex
+  namespace: cocoindex
+spec:
+  clusterRef:
+    name: cocoindex-cluster
+  
+  # Tenant-specific indexing configuration
+  indexing:
+    repoPath: "/data/repos/dev-team"
+    autoIndex: true
+    
+  # Access control
+  access:
+    admins:
+      - user: admin@company.com
+    members:
+      - user: dev1@company.com
+      - user: dev2@company.com
+
+---
+# -----------------------------------------------------------------------------
+# HiveWorkerPool CRD for CocoIndex Workers
+# -----------------------------------------------------------------------------
+apiVersion: hive.io/v1alpha1
+kind: HiveWorkerPool
+metadata:
+  name: cocoindex-worker-pool
+  namespace: cocoindex
+spec:
+  clusterRef:
+    name: cocoindex-cluster
+  
+  replicas: 2
+  
+  template:
+    spec:
+      containers:
+        - name: cocoindex-worker
+          image: cocoindex/cocoindex:latest
+          imagePullPolicy: Never
+          env:
+            - name: COCOINDEX_MODE
+              value: "worker"
+            - name: COCOINDEX_LANCEDB_URI
+              value: "/data/lancedb"
+            - name: COCOINDEX_EMBEDDING_URL
+              value: "http://llama-embeddings.cocoindex.svc.cluster.local:8080"
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2"
+            limits:
+              memory: "8Gi"
+              cpu: "4"
+          volumeMounts:
+            - name: repos
+              mountPath: /data/repos
+              readOnly: true
+            - name: lancedb
+              mountPath: /data/lancedb
+      volumes:
+        - name: repos
+          hostPath:
+            path: /data/repos
+            type: DirectoryOrCreate
+        - name: lancedb
+          persistentVolumeClaim:
+            claimName: lancedb-pvc
+
+---
+# -----------------------------------------------------------------------------
+# Service for CocoIndex API
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: cocoindex-api
+  namespace: cocoindex
+  labels:
+    app: cocoindex
+    component: api
+spec:
+  type: ClusterIP
+  selector:
+    app: cocoindex
+    component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+---
+# -----------------------------------------------------------------------------
+# Ingress for External Access
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cocoindex-ingress
+  namespace: cocoindex
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: cocoindex.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cocoindex-api
+                port:
+                  number: 8080
+
+---
+# -----------------------------------------------------------------------------
+# ConfigMap for Hive Control Plane Integration
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cocoindex-hive-config
+  namespace: cocoindex
+data:
+  # Hive MCP (Model Context Protocol) integration
+  hive.mcp.enabled: "true"
+  hive.mcp.endpoint: "http://hive-control-plane.hive-system.svc.cluster.local:3100/api/mcp"
+  
+  # Agent query endpoints
+  hive.agents.queryEndpoint: "http://cocoindex-api.cocoindex.svc.cluster.local:8080/search"
+  hive.agents.indexEndpoint: "http://cocoindex-api.cocoindex.svc.cluster.local:8080/index"
+  
+  # LanceDB direct access for advanced queries
+  hive.storage.lancedb.uri: "/data/lancedb"
+  hive.storage.lancedb.table: "code_embeddings"

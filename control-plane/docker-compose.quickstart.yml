@@ -1,0 +1,18 @@
+services:
+  hive:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${HIVE_PORT:-3100}:3100"
+    environment:
+      HOST: "0.0.0.0"
+      HIVE_HOME: "/hive"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      HIVE_DEPLOYMENT_MODE: "authenticated"
+      HIVE_DEPLOYMENT_EXPOSURE: "private"
+      HIVE_PUBLIC_URL: "${HIVE_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+    volumes:
+      - "${HIVE_DATA_DIR:-./data/docker-hive}:/hive"

@@ -1,7 +1,7 @@
 package testutil
 
 import (
-	hivev1alpha1 "github.com/enkom/hive-operator/api/v1alpha1"
+	hivev1alpha1 "github.com/Enkom-Tech/hive-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -33,7 +33,7 @@ func HiveWorkerPoolFixture(name, namespace, companyRef, workerImage string, repl
 	return &hivev1alpha1.HiveWorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: hivev1alpha1.HiveWorkerPoolSpec{
-			CompanyRef:   companyRef,
+			CompanyRef:  companyRef,
 			Replicas:    replicas,
 			WorkerImage: workerImage,
 		},

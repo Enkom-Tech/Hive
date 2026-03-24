@@ -1,0 +1,56 @@
+name: Control plane PR Verify
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['control-plane/**']
+
+concurrency:
+  group: control-plane-pr-verify-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    env:
+      HIVE_WORKER_DELIVERY_PUBSUB_TEST_URL: redis://127.0.0.1:6379
+    defaults:
+      run:
+        working-directory: control-plane
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: control-plane/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: No legacy drone API strings in production source
+        run: pnpm check:legacy-drone-api
+
+      - name: Run tests
+        run: pnpm test:coverage
+
+      - name: Build
+        run: pnpm build

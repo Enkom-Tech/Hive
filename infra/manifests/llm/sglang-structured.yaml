@@ -1,0 +1,48 @@
+# Optional: SGLang Deployment + Service for structured output (JSON tools, workflows).
+# Apply when following control-plane/doc/K3S-LLM-DEPLOYMENT.md. Not managed by ArgoCD app-of-apps by default.
+# Requires GPU node: set nodeSelector and nvidia.com/gpu limit.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sglang-structured
+  labels:
+    app: sglang-structured
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sglang-structured
+  template:
+    metadata:
+      labels:
+        app: sglang-structured
+    spec:
+      nodeSelector:
+        gpu: "true"
+      containers:
+        - name: sglang
+          image: sglang/sglang:latest
+          command: ["python", "-m", "sglang.launch_server"]
+          args:
+            - "--model-path=meta-llama/Meta-Llama-3-8B-Instruct"
+            - "--port=3000"
+            - "--structured-output"
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+          ports:
+            - containerPort: 3000
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-structured
+spec:
+  selector:
+    app: sglang-structured
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http

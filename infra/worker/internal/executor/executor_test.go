@@ -9,7 +9,7 @@ import (
 )
 
 func TestRun_NoCommand_ReturnsNil(t *testing.T) {
-	ex := &Executor{}
+	ex := &ProcessExecutor{}
 	stdout, stderr, err := ex.Run(context.Background(), &Payload{AgentID: "a1", RunID: "r1"}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -22,8 +22,8 @@ func TestRun_NoCommand_ReturnsNil(t *testing.T) {
 func TestRun_OutputCapture(t *testing.T) {
 	fixedOut := []byte("line1\nline2")
 	fixedErr := []byte("errline")
-	ex := &Executor{
-		Runner: &fixedRunner{stdout: fixedOut, stderr: fixedErr},
+	ex := &ProcessExecutor{
+		Runner:  &fixedRunner{stdout: fixedOut, stderr: fixedErr},
 		Command: "fake",
 	}
 	stdout, stderr, err := ex.Run(context.Background(), &Payload{AgentID: "a1", RunID: "r1"}, "")
@@ -49,7 +49,7 @@ func (f *fixedRunner) Run(_ context.Context, _ string, _ []string, _ string, _ [
 
 func TestRun_Timeout(t *testing.T) {
 	blocker := &BlockingRunner{}
-	ex := &Executor{Runner: blocker, Command: "fake"}
+	ex := &ProcessExecutor{Runner: blocker, Command: "fake"}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	_, _, err := ex.Run(ctx, &Payload{AgentID: "a1", RunID: "r1"}, "")
@@ -66,7 +66,7 @@ func TestRun_Timeout(t *testing.T) {
 
 func TestRun_Cancellation(t *testing.T) {
 	blocker := &BlockingRunner{}
-	ex := &Executor{Runner: blocker, Command: "fake"}
+	ex := &ProcessExecutor{Runner: blocker, Command: "fake"}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -88,8 +88,8 @@ func TestRun_Cancellation(t *testing.T) {
 
 func TestRun_EnvPassedToRunner(t *testing.T) {
 	var seenEnv []string
-	ex := &Executor{
-		Runner: &envCaptureRunner{env: &seenEnv},
+	ex := &ProcessExecutor{
+		Runner:  &envCaptureRunner{env: &seenEnv},
 		Command: "fake",
 	}
 	_, _, _ = ex.Run(context.Background(), &Payload{

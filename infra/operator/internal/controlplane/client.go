@@ -1,4 +1,4 @@
-// Package controlplane provides a REST client for the Squadron (future: Hive) control plane API.
+// Package controlplane provides a REST client for the Hive control plane API.
 // Package name is neutral so the product rename is a one-line import change.
 package controlplane
 

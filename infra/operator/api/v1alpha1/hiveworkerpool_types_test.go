@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -46,7 +47,7 @@ func TestHiveWorkerPool_ValidateCreate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &HiveWorkerPool{Spec: tt.spec}
-			_, err := p.ValidateCreate()
+			_, err := p.ValidateCreate(context.Background(), p)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateCreate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -56,7 +57,7 @@ func TestHiveWorkerPool_ValidateCreate(t *testing.T) {
 
 func TestHiveWorkerPool_ValidateCreate_LatestWarning(t *testing.T) {
 	p := &HiveWorkerPool{Spec: HiveWorkerPoolSpec{CompanyRef: "acme", Replicas: 1, WorkerImage: "hive-worker:latest"}}
-	warnings, err := p.ValidateCreate()
+	warnings, err := p.ValidateCreate(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
 	}

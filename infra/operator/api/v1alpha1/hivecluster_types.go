@@ -7,7 +7,7 @@ import (
 // HiveClusterSpec defines the desired state of HiveCluster.
 // +kubebuilder:validation:Required
 type HiveClusterSpec struct {
-	// ControlPlaneURL is the URL of the Squadron (future: Hive) control plane API.
+	// ControlPlaneURL is the URL of the Hive control plane API.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Format=uri
 	ControlPlaneURL string `json:"controlPlaneUrl"`

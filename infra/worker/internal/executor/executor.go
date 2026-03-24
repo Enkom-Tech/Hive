@@ -2,13 +2,16 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Payload is the task payload (agent, run id, opaque context).
@@ -16,6 +19,11 @@ type Payload struct {
 	AgentID string
 	RunID   string
 	Context []byte
+}
+
+// Executor runs one task (e.g. invoke a CLI with context). Implementations are allowlisted and configured by the operator.
+type Executor interface {
+	Run(ctx context.Context, payload *Payload, workspaceDir string) (stdout, stderr []byte, err error)
 }
 
 // CommandRunner runs a command and returns stdout/stderr. Used for dependency injection in tests.
@@ -27,7 +35,7 @@ type CommandRunner interface {
 type DefaultCommandRunner struct{}
 
 func (DefaultCommandRunner) Run(ctx context.Context, name string, args []string, dir string, env []string) (stdout, stderr []byte, err error) {
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- name from operator-controlled config (HIVE_TOOL_CMD)
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- name from operator-controlled config (HIVE_TOOL_CMD / adapter registry)
 	cmd.Dir = dir
 	cmd.Env = env
 	var outBuf, errBuf bytes.Buffer
@@ -37,8 +45,8 @@ func (DefaultCommandRunner) Run(ctx context.Context, name string, args []string,
 	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
-// Executor runs one task by invoking a configurable command.
-type Executor struct {
+// ProcessExecutor runs one task by invoking a configurable command (implements Executor).
+type ProcessExecutor struct {
 	// Command is the executable name (e.g. "claude"). From HIVE_TOOL_CMD if empty.
 	Command string
 	// Runner is the command runner. If nil, DefaultCommandRunner is used.
@@ -47,24 +55,29 @@ type Executor struct {
 	WorkspaceDir string
 }
 
-func (e *Executor) command() string {
+func (e *ProcessExecutor) command() string {
 	if e.Command != "" {
 		return e.Command
 	}
 	return os.Getenv("HIVE_TOOL_CMD")
 }
 
-func (e *Executor) workspaceDir() string {
-	if e.WorkspaceDir != "" {
-		return e.WorkspaceDir
-	}
+// DefaultWorkspaceRoot is the directory used for runs when the executor is given an empty workspace path (HIVE_WORKSPACE or "/workspace/repo").
+func DefaultWorkspaceRoot() string {
 	if d := os.Getenv("HIVE_WORKSPACE"); d != "" {
 		return d
 	}
 	return "/workspace/repo"
 }
 
-func (e *Executor) runner() CommandRunner {
+func (e *ProcessExecutor) workspaceDir() string {
+	if e.WorkspaceDir != "" {
+		return e.WorkspaceDir
+	}
+	return DefaultWorkspaceRoot()
+}
+
+func (e *ProcessExecutor) runner() CommandRunner {
 	if e.Runner != nil {
 		return e.Runner
 	}
@@ -72,7 +85,7 @@ func (e *Executor) runner() CommandRunner {
 }
 
 // Run runs the task: builds env, invokes the command, returns stdout/stderr. The process is killed when ctx is done.
-func (e *Executor) Run(ctx context.Context, payload *Payload, workspaceDir string) (stdout, stderr []byte, err error) {
+func (e *ProcessExecutor) Run(ctx context.Context, payload *Payload, workspaceDir string) (stdout, stderr []byte, err error) {
 	cmd := e.command()
 	if cmd == "" {
 		return nil, nil, nil // no-op when no command configured
@@ -94,6 +107,72 @@ func (e *Executor) Run(ctx context.Context, payload *Payload, workspaceDir strin
 	}
 	runner := e.runner()
 	return runner.Run(ctx, cmd, nil, absDir, env)
+}
+
+// LogChunkCallback is called for each streamed stdout/stderr chunk (stream, chunk, iso8601 ts).
+type LogChunkCallback func(stream string, chunk string, ts string)
+
+// RunStream runs the task and invokes onChunk for each stdout/stderr chunk. Returns full stdout, stderr, and error when done.
+// If onChunk is nil, behaves like Run (no streaming).
+func (e *ProcessExecutor) RunStream(ctx context.Context, payload *Payload, workspaceDir string, onChunk LogChunkCallback) (stdout, stderr []byte, err error) {
+	cmd := e.command()
+	if cmd == "" {
+		return nil, nil, nil
+	}
+	if workspaceDir == "" {
+		workspaceDir = e.workspaceDir()
+	}
+	absDir, err := filepath.Abs(workspaceDir)
+	if err != nil {
+		absDir = workspaceDir
+	}
+	env := append(os.Environ(),
+		"HIVE_AGENT_ID="+payload.AgentID,
+		"HIVE_RUN_ID="+payload.RunID,
+	)
+	if len(payload.Context) > 0 {
+		env = append(env, "HIVE_CONTEXT_JSON="+base64.StdEncoding.EncodeToString(payload.Context))
+	}
+	if onChunk == nil {
+		return e.Run(ctx, payload, workspaceDir)
+	}
+	// Use exec with pipes to stream stdout/stderr
+	execCmd := exec.CommandContext(ctx, cmd)
+	execCmd.Dir = absDir
+	execCmd.Env = env
+	stdoutPipe, err := execCmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	stderrPipe, err := execCmd.StderrPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := execCmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	var outBuf, errBuf bytes.Buffer
+	var wg sync.WaitGroup
+	readStream := func(pipe io.Reader, stream string, buf *bytes.Buffer) {
+		defer wg.Done()
+		scanner := bufio.NewScanner(pipe)
+		scanner.Buffer(nil, 64*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			buf.Write(line)
+			buf.WriteByte('\n')
+			onChunk(stream, string(line)+"\n", time.Now().UTC().Format(time.RFC3339Nano))
+		}
+	}
+	wg.Add(2)
+	go readStream(stdoutPipe, "stdout", &outBuf)
+	go readStream(stderrPipe, "stderr", &errBuf)
+	wg.Wait()
+	waitErr := execCmd.Wait()
+	if ctx.Err() != nil {
+		return outBuf.Bytes(), errBuf.Bytes(), ctx.Err()
+	}
+	return outBuf.Bytes(), errBuf.Bytes(), waitErr
 }
 
 // BlockingRunner is a CommandRunner that blocks until context is cancelled (for cancellation tests).

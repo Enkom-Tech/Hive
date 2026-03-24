@@ -8,7 +8,7 @@ for arg in "$@"; do
 done
 run() { [ "$DRY_RUN" = true ] && echo "[DRY-RUN] $*" || "$@"; }
 
-[ "$DRY_RUN" = true ] && echo "[DRY-RUN] curl -sfL https://get.k3s.io | sh -s - server ..." || curl -sfL https://get.k3s.io | sh -s - server --write-kubeconfig-mode 644
+[ "$DRY_RUN" = true ] && echo "[DRY-RUN] curl -sfL https://get.k3s.io | sh -s - server --disable traefik --write-kubeconfig-mode 644" || curl -sfL https://get.k3s.io | sh -s - server --disable traefik --write-kubeconfig-mode 644
 run kubectl create namespace hive-system 2>/dev/null || true
 run kubectl create namespace hive-storage 2>/dev/null || true
 run kubectl apply -f - <<EOF

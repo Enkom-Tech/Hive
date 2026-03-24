@@ -1,0 +1,96 @@
+import express, { type Router } from "express";
+import type { Principal } from "@hive/shared";
+import { errorHandler } from "../../middleware/error-handler.js";
+
+export type BoardPrincipalOpts = {
+  id?: string;
+  companyIds: string[];
+  isSystem?: boolean;
+  isInstanceAdmin?: boolean;
+};
+
+export type AgentPrincipalOpts = {
+  agentId: string;
+  companyId: string;
+  runId?: string;
+};
+
+/** Build a board principal (user or system) for tests. */
+export function principalBoard(opts: BoardPrincipalOpts): Principal {
+  if (opts.isSystem) {
+    return {
+      type: "system",
+      id: opts.id ?? "local-board",
+      roles: opts.isInstanceAdmin ? ["instance_admin"] : [],
+    };
+  }
+  return {
+    type: "user",
+    id: opts.id ?? "user-1",
+    company_ids: opts.companyIds,
+    roles: opts.isInstanceAdmin ? ["instance_admin"] : [],
+  };
+}
+
+/** Build an agent principal for tests. */
+export function principalAgent(opts: AgentPrincipalOpts): Principal {
+  return {
+    type: "agent",
+    id: opts.agentId,
+    company_id: opts.companyId,
+    roles: [],
+    ...(opts.runId ? { runId: opts.runId } : {}),
+  };
+}
+
+export type TestPrincipal = Principal | null;
+
+export interface RouteTestAppOptions {
+  /** Router to mount at /api (e.g. projectRoutes(db)) */
+  router: Router;
+  /** Principal to inject; defaults to board user with companyIds ["company-1"] */
+  principal?: TestPrincipal;
+}
+
+const defaultPrincipal: Principal = principalBoard({
+  companyIds: ["company-1"],
+  isSystem: false,
+  isInstanceAdmin: false,
+});
+
+export function createRouteTestApp(options: RouteTestAppOptions): express.Express {
+  const { router, principal = defaultPrincipal } = options;
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as express.Request & { principal: Principal | null }).principal = principal;
+    next();
+  });
+  app.use("/api", router);
+  app.use(errorHandler);
+  return app;
+}
+
+/** @deprecated Use principalBoard. */
+export function actorBoard(
+  companyIds: string[],
+  overrides?: Partial<Omit<BoardPrincipalOpts, "companyIds">> & { source?: "session" | "local_implicit" },
+): Principal {
+  const isSystem = overrides?.source === "local_implicit" || overrides?.isSystem;
+  return principalBoard({ companyIds, isSystem: Boolean(isSystem), ...overrides });
+}
+
+/** @deprecated Use principalAgent. */
+export function actorAgent(companyId: string, agentId = "agent-1", _overrides?: unknown): Principal {
+  return principalAgent({ agentId, companyId });
+}
+
+/** No principal (unauthenticated). */
+export function principalNone(): null {
+  return null;
+}
+
+/** @deprecated Use principalNone. */
+export function actorNone(): null {
+  return principalNone();
+}

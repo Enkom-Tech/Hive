@@ -1,5 +1,5 @@
 // Mock control plane HTTP server for E2E tests. Implements the subset of
-// Squadron API used by the Hive operator: GET/POST agents, POST keys, PATCH agent, pause/resume, health.
+// Hive API used by the Hive operator: GET/POST agents, POST keys, PATCH agent, pause/resume, health.
 package main
 
 import (

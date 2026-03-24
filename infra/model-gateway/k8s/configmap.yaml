@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-gateway-models
+  labels:
+    app: model-gateway
+data:
+  models.json: |
+    {
+      "models": [
+        {"id": "vllm:llama-3.1-8b", "base_url": "http://vllm-llama:8000/v1"},
+        {"id": "lmstudio:local", "base_url": "http://lmstudio-proxy:1234/v1"}
+      ]
+    }

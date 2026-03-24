@@ -1,26 +1,23 @@
 package v1alpha1
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 const maxReplicas = 50
 
 func (r *HiveWorkerPool) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
-		Complete()
+	return ctrl.NewWebhookManagedBy(mgr, r).WithValidator(r).Complete()
 }
 
 // +kubebuilder:webhook:path=/mutate-hive-io-v1alpha1-hiveworkerpool,mutating=false,failurePolicy=fail,sideEffects=None,groups=hive.io,resources=hiveworkerpools,verbs=create;update,versions=v1alpha1,name=vhiveworkerpool.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Validator = &HiveWorkerPool{}
+var _ admission.Validator[*HiveWorkerPool] = &HiveWorkerPool{}
 
 func (r *HiveWorkerPool) validateSpec() (admission.Warnings, error) {
 	if r.Spec.CompanyRef == "" {
@@ -35,24 +32,24 @@ func (r *HiveWorkerPool) validateSpec() (admission.Warnings, error) {
 	return nil, nil
 }
 
-// ValidateCreate implements webhook.Validator.
-func (r *HiveWorkerPool) ValidateCreate() (admission.Warnings, error) {
-	warnings, err := r.validateSpec()
+// ValidateCreate implements admission.Validator.
+func (r *HiveWorkerPool) ValidateCreate(ctx context.Context, obj *HiveWorkerPool) (admission.Warnings, error) {
+	warnings, err := obj.validateSpec()
 	if err != nil {
 		return warnings, err
 	}
-	if strings.HasSuffix(r.Spec.WorkerImage, ":latest") {
+	if strings.HasSuffix(obj.Spec.WorkerImage, ":latest") {
 		warnings = append(warnings, "workerImage should not use :latest tag in production")
 	}
 	return warnings, nil
 }
 
-// ValidateUpdate implements webhook.Validator.
-func (r *HiveWorkerPool) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
-	return r.ValidateCreate()
+// ValidateUpdate implements admission.Validator.
+func (r *HiveWorkerPool) ValidateUpdate(ctx context.Context, oldObj, newObj *HiveWorkerPool) (admission.Warnings, error) {
+	return r.ValidateCreate(ctx, newObj)
 }
 
-// ValidateDelete implements webhook.Validator.
-func (r *HiveWorkerPool) ValidateDelete() (admission.Warnings, error) {
+// ValidateDelete implements admission.Validator.
+func (r *HiveWorkerPool) ValidateDelete(ctx context.Context, obj *HiveWorkerPool) (admission.Warnings, error) {
 	return nil, nil
 }
