@@ -37,7 +37,7 @@
   "devDependencies": {
     "@realfavicongenerator/generate-favicon": "^0.6.3",
     "@realfavicongenerator/image-adapter-node": "^0.6.3",
-    "@tailwindcss/vite": "^4.2.1",
+    "@tailwindcss/vite": "^4.2.2",
     "@testing-library/react": "^16.0.0",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
