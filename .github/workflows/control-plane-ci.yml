@@ -18,7 +18,7 @@ jobs:
       HIVE_WORKER_DELIVERY_PUBSUB_TEST_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           version: 9
       - uses: actions/setup-node@v4
