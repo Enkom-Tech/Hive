@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -42,7 +43,7 @@ func TestHiveCompany_ValidateCreate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &HiveCompany{Spec: tt.spec}
-			_, err := c.ValidateCreate()
+			_, err := c.ValidateCreate(context.Background(), c)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateCreate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -53,7 +54,7 @@ func TestHiveCompany_ValidateCreate(t *testing.T) {
 func TestHiveCompany_ValidateUpdate_ImmutableCompanyID(t *testing.T) {
 	old := &HiveCompany{Spec: HiveCompanySpec{CompanyID: "550e8400-e29b-41d4-a716-446655440000", StorageClass: "sc", StorageSize: "10Gi"}}
 	new := &HiveCompany{Spec: HiveCompanySpec{CompanyID: "660e8400-e29b-41d4-a716-446655440000", StorageClass: "sc", StorageSize: "10Gi"}}
-	_, err := new.ValidateUpdate(old)
+	_, err := new.ValidateUpdate(context.Background(), old, new)
 	if err == nil {
 		t.Error("expected error when companyId changes")
 	}

@@ -1,0 +1,37 @@
+name: Control plane CI
+on:
+  push:
+    branches: [main]
+    paths: ['control-plane/**']
+  pull_request:
+    branches: [main]
+    paths: ['control-plane/**']
+jobs:
+  control-plane:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    env:
+      HIVE_WORKER_DELIVERY_PUBSUB_TEST_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: control-plane/pnpm-lock.yaml
+      - name: Install
+        run: |
+          cd control-plane && pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: |
+          cd control-plane && pnpm typecheck
+      - name: Test
+        run: |
+          cd control-plane && pnpm test:coverage

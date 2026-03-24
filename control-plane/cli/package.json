@@ -1,0 +1,51 @@
+{
+  "name": "@hive/cli",
+  "version": "0.2.7",
+  "description": "Hive CLI — orchestrate AI agent teams",
+  "type": "module",
+  "bin": {
+    "hive": "./dist/index.js"
+  },
+  "keywords": [
+    "hive",
+    "ai",
+    "agents",
+    "orchestration",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Enkom-Tech/Hive.git",
+    "directory": "control-plane/cli"
+  },
+  "homepage": "https://github.com/Enkom-Tech/Hive",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "node --input-type=module -e \"import esbuild from 'esbuild'; import config from './esbuild.config.mjs'; await esbuild.build(config); import fs from 'fs'; if (process.platform !== 'win32') fs.chmodSync('dist/index.js', 0o755);\"",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "@hive/adapter-utils": "workspace:*",
+    "@hive/db": "workspace:*",
+    "@hive/server": "workspace:*",
+    "@hive/shared": "workspace:*",
+    "commander": "^14.0.3",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.45.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

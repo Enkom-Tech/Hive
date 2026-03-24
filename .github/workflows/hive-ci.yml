@@ -103,10 +103,73 @@ jobs:
       - name: Docker build worker
         run: |
           docker build -t hive-worker:latest infra/worker
-      - name: Trivy scan
+      - name: Trivy scan operator
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'hive-operator:latest'
           format: 'table'
           exit-code: '0'
         continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # CocoIndex — Python semantic code indexing service
+  # Runs SAST (bandit), dependency audit (pip-audit), linting (ruff),
+  # type checking (mypy), and unit tests (pytest).
+  # ---------------------------------------------------------------------------
+  cocoindex-lint-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/cocoindex-lancedb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install runtime + dev dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install bandit[toml] ruff mypy pytest pytest-asyncio pytest-cov respx pip-tools
+
+      - name: Bandit SAST scan
+        # -ll: medium+ severity, -ii: medium+ confidence — fails CI on real findings
+        run: bandit -r cocoindex_server.py auth.py -ll -ii
+
+      - name: pip-audit vulnerability check
+        run: pip-audit -r requirements.txt
+
+      - name: Ruff lint
+        run: ruff check cocoindex_server.py auth.py
+
+      - name: Mypy type check
+        run: mypy cocoindex_server.py auth.py --ignore-missing-imports
+
+      - name: Unit tests
+        run: |
+          if [ -d tests/unit ]; then
+            pytest tests/unit/ -v --cov=. --cov-report=xml -x
+          else
+            echo "No unit tests directory yet — skipping"
+          fi
+
+  cocoindex-build:
+    runs-on: ubuntu-latest
+    needs: cocoindex-lint-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker build cocoindex
+        run: docker build -t cocoindex:latest infra/cocoindex-lancedb
+
+      - name: Trivy scan cocoindex
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'cocoindex:latest'
+          format: 'table'
+          # Fail on HIGH/CRITICAL — stricter than the Go operator job (exit-code 0)
+          # because this is a new service and should have a clean baseline.
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'

@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: hive
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d hive"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+
+  server:
+    build: .
+    ports:
+      - "3100:3100"
+    environment:
+      DATABASE_URL: postgres://hive:hive@db:5432/hive
+      PORT: "3100"
+      SERVE_UI: "true"
+      HIVE_DEPLOYMENT_MODE: "authenticated"
+      HIVE_DEPLOYMENT_EXPOSURE: "private"
+      HIVE_PUBLIC_URL: "${HIVE_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+    volumes:
+      - hive-data:/hive
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  hive-data:

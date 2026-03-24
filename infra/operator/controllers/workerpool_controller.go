@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -12,12 +13,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	hivev1alpha1 "github.com/enkom/hive-operator/api/v1alpha1"
-	"github.com/enkom/hive-operator/internal/controlplane"
+	hivev1alpha1 "github.com/Enkom-Tech/hive-operator/api/v1alpha1"
+	"github.com/Enkom-Tech/hive-operator/internal/controlplane"
 )
 
 const (
@@ -26,6 +30,14 @@ const (
 	poolNameLabel  = "hive.io/pool-name"
 	finalizerName  = "hive.io/finalizer"
 )
+
+// workerImagePullPolicy returns PullIfNotPresent for digest-pinned images, PullAlways for mutable tags.
+func workerImagePullPolicy(workerImage string) corev1.PullPolicy {
+	if strings.Contains(workerImage, "@sha256:") {
+		return corev1.PullIfNotPresent
+	}
+	return corev1.PullAlways
+}
 
 // HiveWorkerPoolReconciler reconciles a HiveWorkerPool object.
 type HiveWorkerPoolReconciler struct {
@@ -37,6 +49,8 @@ type HiveWorkerPoolReconciler struct {
 // +kubebuilder:rbac:groups=hive.io,resources=hiveworkerpools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=hive.io,resources=hivecompanies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hive.io,resources=hiveclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hive.io,resources=hiveindexers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hive.io,resources=hiveindexers/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;create;update;patch;delete
@@ -159,10 +173,10 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			poolNameLabel:  pool.Name,
 		}
 		createReq := controlplane.CreateAgentRequest{
-			Name:         agentName,
-			AdapterType:  "http",
+			Name:          agentName,
+			AdapterType:   "http",
 			AdapterConfig: map[string]interface{}{"url": svcURL},
-			Metadata:     meta,
+			Metadata:      meta,
 		}
 		agent, err := cp.CreateAgent(ctx, companyID, createReq)
 		if err != nil {
@@ -212,6 +226,9 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	envVars := []corev1.EnvVar{
 		{Name: "HIVE_CONTROL_PLANE_URL", Value: cluster.Spec.ControlPlaneURL},
 	}
+	if pool.Spec.ModelGatewayURL != "" {
+		envVars = append(envVars, corev1.EnvVar{Name: "HIVE_MODEL_GATEWAY_URL", Value: pool.Spec.ModelGatewayURL})
+	}
 	if desired == 1 {
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "HIVE_AGENT_ID", ValueFrom: &corev1.EnvVarSource{
@@ -255,21 +272,57 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		)
 	}
 
+	// Inject MCP gateway credentials if a ready HiveIndexer with a gateway exists for this company.
+	// COCOINDEX_API_TOKEN (admin) is NEVER injected here — workers receive only HIVE_MCP_TOKEN.
+	indexerList := &hivev1alpha1.HiveIndexerList{}
+	if err := r.List(ctx, indexerList, client.InNamespace(req.Namespace)); err == nil {
+		for i := range indexerList.Items {
+			idx := &indexerList.Items[i]
+			if idx.Spec.CompanyRef == pool.Spec.CompanyRef &&
+				idx.Status.Ready &&
+				idx.Status.GatewayURL != "" &&
+				idx.Status.GatewaySecretName != "" {
+				envVars = append(envVars,
+					corev1.EnvVar{
+						Name:  "HIVE_MCP_URL",
+						Value: idx.Status.GatewayURL + "/mcp",
+					},
+					corev1.EnvVar{
+						Name: "HIVE_MCP_TOKEN",
+						ValueFrom: &corev1.EnvVarSource{
+							SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: idx.Status.GatewaySecretName,
+								},
+								Key: "token",
+							},
+						},
+					},
+				)
+				break
+			}
+		}
+	}
+
 	pvcName := "workspace-" + company.Spec.CompanyID
+	workerPullPolicy := workerImagePullPolicy(pool.Spec.WorkerImage)
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: tenantNS, Name: pool.Name},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &desired,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": pool.Name}},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": pool.Name}},
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+					"app":          pool.Name,
+					"hive.io/role": "worker", // used by NetworkPolicy to allow worker→gateway on 9090
+				}},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{
 						Name:            "worker",
 						Image:           pool.Spec.WorkerImage,
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: workerPullPolicy,
 						Ports:           []corev1.ContainerPort{{ContainerPort: 8080, Name: "http"}},
-						Env:   envVars,
+						Env:             envVars,
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "workspace", MountPath: "/workspace"},
 						},
@@ -303,6 +356,7 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			if r.Get(ctx, client.ObjectKey{Namespace: tenantNS, Name: pool.Name}, existing) == nil {
 				existing.Spec.Replicas = &desired
 				existing.Spec.Template.Spec.Containers[0].Image = pool.Spec.WorkerImage
+				existing.Spec.Template.Spec.Containers[0].ImagePullPolicy = workerPullPolicy
 				existing.Spec.Template.Spec.Containers[0].Env = envVars
 				_ = r.Update(ctx, existing)
 			}
@@ -342,8 +396,35 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 // SetupWithManager sets up the controller with the Manager.
+// Watches HiveIndexer so that when an indexer becomes ready (or its gateway URL changes),
+// all WorkerPools for the same company are reconciled and receive the updated MCP credentials.
 func (r *HiveWorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hivev1alpha1.HiveWorkerPool{}).
+		Watches(
+			&hivev1alpha1.HiveIndexer{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				indexer, ok := obj.(*hivev1alpha1.HiveIndexer)
+				if !ok {
+					return nil
+				}
+				poolList := &hivev1alpha1.HiveWorkerPoolList{}
+				if err := r.List(ctx, poolList, client.InNamespace(indexer.Namespace)); err != nil {
+					return nil
+				}
+				var requests []reconcile.Request
+				for _, pool := range poolList.Items {
+					if pool.Spec.CompanyRef == indexer.Spec.CompanyRef {
+						requests = append(requests, reconcile.Request{
+							NamespacedName: types.NamespacedName{
+								Namespace: pool.Namespace,
+								Name:      pool.Name,
+							},
+						})
+					}
+				}
+				return requests
+			}),
+		).
 		Complete(r)
 }

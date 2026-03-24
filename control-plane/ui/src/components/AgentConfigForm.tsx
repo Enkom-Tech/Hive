@@ -1,0 +1,821 @@
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type {
+  Agent,
+  AdapterEnvironmentTestResult,
+  CompanySecret,
+  EnvBinding,
+} from "@hive/shared";
+import type { AdapterModel } from "../api/agents";
+import { agentsApi } from "../api/agents";
+import { secretsApi } from "../api/secrets";
+import { assetsApi } from "../api/assets";
+import { Button } from "@/components/ui/button";
+import { Heart, X } from "lucide-react";
+import { cn } from "../lib/utils";
+import { queryKeys } from "../lib/queryKeys";
+import { useCompany } from "../context/CompanyContext";
+import {
+  Field,
+  ToggleField,
+  ToggleWithNumber,
+  CollapsibleSection,
+  DraftInput,
+  DraftNumberInput,
+  help,
+  adapterLabels,
+} from "./agent-config-primitives";
+import { defaultCreateValues } from "./agent-config-defaults";
+import { getUIAdapter } from "../adapters";
+import { MarkdownEditor } from "./MarkdownEditor";
+import { Link } from "@/lib/router";
+
+/* ---- Create mode values ---- */
+
+// Canonical type lives in @hive/adapter-utils; re-exported here
+// so existing imports from this file keep working.
+export type { CreateConfigValues } from "@hive/adapter-utils";
+import type { CreateConfigValues } from "@hive/adapter-utils";
+
+/* ---- Props ---- */
+
+type AgentConfigFormProps = {
+  adapterModels?: AdapterModel[];
+  onDirtyChange?: (dirty: boolean) => void;
+  onSaveActionChange?: (save: (() => void) | null) => void;
+  onCancelActionChange?: (cancel: (() => void) | null) => void;
+  hideInlineSave?: boolean;
+  /** "cards" renders each section as heading + bordered card (for settings pages). Default: "inline" (border-b dividers). */
+  sectionLayout?: "inline" | "cards";
+} & (
+  | {
+      mode: "create";
+      values: CreateConfigValues;
+      onChange: (patch: Partial<CreateConfigValues>) => void;
+    }
+  | {
+      mode: "edit";
+      agent: Agent;
+      onSave: (patch: Record<string, unknown>) => void;
+      isSaving?: boolean;
+    }
+);
+
+/* ---- Edit mode overlay (dirty tracking) ---- */
+
+interface Overlay {
+  identity: Record<string, unknown>;
+  adapterType?: string;
+  adapterConfig: Record<string, unknown>;
+  heartbeat: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+}
+
+const emptyOverlay: Overlay = {
+  identity: {},
+  adapterConfig: {},
+  heartbeat: {},
+  runtime: {},
+};
+
+/** Stable empty object used as fallback for missing env config to avoid new-object-per-render. */
+const EMPTY_ENV: Record<string, EnvBinding> = {};
+
+function isOverlayDirty(o: Overlay): boolean {
+  return (
+    Object.keys(o.identity).length > 0 ||
+    o.adapterType !== undefined ||
+    Object.keys(o.adapterConfig).length > 0 ||
+    Object.keys(o.heartbeat).length > 0 ||
+    Object.keys(o.runtime).length > 0
+  );
+}
+
+/* ---- Shared input class ---- */
+const inputClass =
+  "w-full rounded-md border border-border px-2.5 py-1.5 bg-transparent outline-none text-sm font-mono placeholder:text-muted-foreground/40";
+
+function parseCommaArgs(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatArgList(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string")
+      .join(", ");
+  }
+  return typeof value === "string" ? value : "";
+}
+
+/* ---- Form ---- */
+
+export function AgentConfigForm(props: AgentConfigFormProps) {
+  const { mode, adapterModels: externalModels } = props;
+  const isCreate = mode === "create";
+  const cards = props.sectionLayout === "cards";
+  const { selectedCompanyId } = useCompany();
+  const queryClient = useQueryClient();
+
+  const { data: availableSecrets = [] } = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.secrets.list(selectedCompanyId) : ["secrets", "none"],
+    queryFn: () => secretsApi.list(selectedCompanyId!),
+    enabled: Boolean(selectedCompanyId),
+  });
+
+  const createSecret = useMutation({
+    mutationFn: (input: { name: string; value: string }) => {
+      if (!selectedCompanyId) throw new Error("Select a company to create secrets");
+      return secretsApi.create(selectedCompanyId, input);
+    },
+    onSuccess: () => {
+      if (!selectedCompanyId) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.secrets.list(selectedCompanyId) });
+    },
+  });
+
+  const uploadMarkdownImage = useMutation({
+    mutationFn: async ({ file, namespace }: { file: File; namespace: string }) => {
+      if (!selectedCompanyId) throw new Error("Select a company to upload images");
+      return assetsApi.uploadImage(selectedCompanyId, file, namespace);
+    },
+  });
+
+  // ---- Edit mode: overlay for dirty tracking ----
+  const [overlay, setOverlay] = useState<Overlay>(emptyOverlay);
+  const agentRef = useRef<Agent | null>(null);
+
+  // Clear overlay when agent data refreshes (after save)
+  useEffect(() => {
+    if (!isCreate) {
+      if (agentRef.current !== null && props.agent !== agentRef.current) {
+        setOverlay({ ...emptyOverlay });
+      }
+      agentRef.current = props.agent;
+    }
+  }, [isCreate, !isCreate ? props.agent : undefined]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isDirty = !isCreate && isOverlayDirty(overlay);
+
+  /** Read effective value: overlay if dirty, else original */
+  function eff<T>(group: keyof Omit<Overlay, "adapterType">, field: string, original: T): T {
+    const o = overlay[group];
+    if (field in o) return o[field] as T;
+    return original;
+  }
+
+  /** Mark field dirty in overlay */
+  function mark(group: keyof Omit<Overlay, "adapterType">, field: string, value: unknown) {
+    setOverlay((prev) => ({
+      ...prev,
+      [group]: { ...prev[group], [field]: value },
+    }));
+  }
+
+  /** Build accumulated patch and send to parent */
+  const handleCancel = useCallback(() => {
+    setOverlay({ ...emptyOverlay });
+  }, []);
+
+  const handleSave = useCallback(() => {
+    if (isCreate || !isDirty) return;
+    const agent = props.agent;
+    const patch: Record<string, unknown> = {};
+
+    if (Object.keys(overlay.identity).length > 0) {
+      Object.assign(patch, overlay.identity);
+    }
+    if (overlay.adapterType !== undefined) {
+      patch.adapterType = overlay.adapterType;
+      // When adapter type changes, send only the new config — don't merge
+      // with old config since old adapter fields are meaningless for the new type
+      patch.adapterConfig = overlay.adapterConfig;
+    } else if (Object.keys(overlay.adapterConfig).length > 0) {
+      const existing = (agent.adapterConfig ?? {}) as Record<string, unknown>;
+      patch.adapterConfig = { ...existing, ...overlay.adapterConfig };
+    }
+    if (Object.keys(overlay.heartbeat).length > 0) {
+      const existingRc = (agent.runtimeConfig ?? {}) as Record<string, unknown>;
+      const existingHb = (existingRc.heartbeat ?? {}) as Record<string, unknown>;
+      patch.runtimeConfig = { ...existingRc, heartbeat: { ...existingHb, ...overlay.heartbeat } };
+    }
+    if (Object.keys(overlay.runtime).length > 0) {
+      Object.assign(patch, overlay.runtime);
+    }
+
+    props.onSave(patch);
+  }, [isCreate, isDirty, overlay, props]);
+
+  useEffect(() => {
+    if (!isCreate) {
+      props.onDirtyChange?.(isDirty);
+      props.onSaveActionChange?.(handleSave);
+      props.onCancelActionChange?.(handleCancel);
+    }
+  }, [isCreate, isDirty, props.onDirtyChange, props.onSaveActionChange, props.onCancelActionChange, handleSave, handleCancel]);
+
+  useEffect(() => {
+    if (isCreate) return;
+    return () => {
+      props.onSaveActionChange?.(null);
+      props.onCancelActionChange?.(null);
+      props.onDirtyChange?.(false);
+    };
+  }, [isCreate, props.onDirtyChange, props.onSaveActionChange, props.onCancelActionChange]);
+
+  // ---- Resolve values ----
+  const config = !isCreate ? ((props.agent.adapterConfig ?? {}) as Record<string, unknown>) : {};
+  const runtimeConfig = !isCreate ? ((props.agent.runtimeConfig ?? {}) as Record<string, unknown>) : {};
+  const heartbeat = !isCreate ? ((runtimeConfig.heartbeat ?? {}) as Record<string, unknown>) : {};
+
+  const adapterType = isCreate
+    ? (props.values.adapterType ?? "managed_worker")
+    : (overlay.adapterType ?? props.agent.adapterType ?? "managed_worker");
+  const uiAdapter = useMemo(() => getUIAdapter("managed_worker"), []);
+
+  // Fetch adapter models for the effective adapter type
+  const {
+    data: fetchedModels,
+    error: fetchedModelsError,
+  } = useQuery({
+    queryKey: selectedCompanyId
+      ? queryKeys.agents.adapterModels(selectedCompanyId, adapterType)
+      : ["agents", "none", "adapter-models", adapterType],
+    queryFn: () => agentsApi.adapterModels(selectedCompanyId!, adapterType),
+    enabled: Boolean(selectedCompanyId),
+  });
+  const models = fetchedModels ?? externalModels ?? [];
+
+  /** Props passed to adapter-specific config field components */
+  const adapterFieldProps = {
+    mode,
+    isCreate,
+    adapterType,
+    values: isCreate ? props.values : null,
+    set: isCreate ? (patch: Partial<CreateConfigValues>) => props.onChange(patch) : null,
+    config,
+    eff: eff as <T>(group: "adapterConfig", field: string, original: T) => T,
+    mark: mark as (group: "adapterConfig", field: string, value: unknown) => void,
+    models,
+  };
+
+  // Section toggle state — advanced always starts collapsed
+  const [runPolicyAdvancedOpen, setRunPolicyAdvancedOpen] = useState(false);
+
+  // Create mode helpers
+  const val = isCreate ? props.values : null;
+  const set = isCreate
+    ? (patch: Partial<CreateConfigValues>) => props.onChange(patch)
+    : null;
+
+  function buildAdapterConfigForTest(): Record<string, unknown> {
+    if (isCreate) {
+      return uiAdapter.buildAdapterConfig(val!);
+    }
+    const base = config as Record<string, unknown>;
+    return { ...base, ...overlay.adapterConfig };
+  }
+
+  const testEnvironment = useMutation({
+    mutationFn: async () => {
+      if (!selectedCompanyId) {
+        throw new Error("Select a company to test adapter environment");
+      }
+      return agentsApi.testEnvironment(selectedCompanyId, adapterType, {
+        adapterConfig: buildAdapterConfigForTest(),
+      });
+    },
+  });
+
+
+  return (
+    <div className={cn("relative", cards && "space-y-6")}>
+      {/* ---- Floating Save button (edit mode, when dirty) ---- */}
+      {isDirty && !props.hideInlineSave && (
+        <div className="sticky top-0 z-10 flex items-center justify-end px-4 py-2 bg-background/90 backdrop-blur-sm border-b border-primary/20">
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">Unsaved changes</span>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={!isCreate && props.isSaving}
+            >
+              {!isCreate && props.isSaving ? "Saving..." : "Save"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Identity (edit only) ---- */}
+      {!isCreate && (
+        <div className={cn(!cards && "border-b border-border")}>
+          {cards
+            ? <h3 className="text-sm font-medium mb-3">Identity</h3>
+            : <div className="px-4 py-2 text-xs font-medium text-muted-foreground">Identity</div>
+          }
+          <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
+            <Field label="Name" hint={help.name}>
+              <DraftInput
+                value={eff("identity", "name", props.agent.name)}
+                onCommit={(v) => mark("identity", "name", v)}
+                immediate
+                className={inputClass}
+                placeholder="Agent name"
+              />
+            </Field>
+            <Field label="Title" hint={help.title}>
+              <DraftInput
+                value={eff("identity", "title", props.agent.title ?? "")}
+                onCommit={(v) => mark("identity", "title", v || null)}
+                immediate
+                className={inputClass}
+                placeholder="e.g. VP of Engineering"
+              />
+            </Field>
+            <Field label="Capabilities" hint={help.capabilities}>
+              <MarkdownEditor
+                value={eff("identity", "capabilities", props.agent.capabilities ?? "")}
+                onChange={(v) => mark("identity", "capabilities", v || null)}
+                placeholder="Describe what this agent can do..."
+                contentClassName="min-h-[44px] text-sm font-mono"
+                imageUploadHandler={async (file) => {
+                  const asset = await uploadMarkdownImage.mutateAsync({
+                    file,
+                    namespace: `agents/${props.agent.id}/capabilities`,
+                  });
+                  return asset.contentPath;
+                }}
+              />
+            </Field>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Adapter ---- */}
+      <div className={cn(!cards && (isCreate ? "border-t border-border" : "border-b border-border"))}>
+        <div className={cn(cards ? "flex items-center justify-between mb-3" : "px-4 py-2 flex items-center justify-between gap-2")}>
+          {cards
+            ? <h3 className="text-sm font-medium">Adapter</h3>
+            : <span className="text-xs font-medium text-muted-foreground">Adapter</span>
+          }
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            onClick={() => testEnvironment.mutate()}
+            disabled={testEnvironment.isPending || !selectedCompanyId}
+          >
+            {testEnvironment.isPending ? "Testing..." : "Test environment"}
+          </Button>
+        </div>
+        <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
+          <Field label="Adapter type" hint={help.adapterType}>
+            <span className="text-sm font-medium">
+              {adapterLabels["managed_worker"] ?? "Managed worker"}
+            </span>
+          </Field>
+
+          {testEnvironment.error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {testEnvironment.error instanceof Error
+                ? testEnvironment.error.message
+                : "Environment test failed"}
+            </div>
+          )}
+
+          {testEnvironment.data && (
+            <AdapterEnvironmentResult result={testEnvironment.data} />
+          )}
+
+          {/* Adapter-specific fields */}
+          <uiAdapter.ConfigFields {...adapterFieldProps} />
+        </div>
+
+        {!isCreate && adapterType === "managed_worker" ? (
+          <div className="mt-4 pt-4 border-t border-border space-y-3">
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Harness placement</span> — board identity vs drone capacity (
+              <code className="font-mono text-[11px]">hive-worker</code>). Set on the{" "}
+              <Link to="/workers" className="text-foreground underline underline-offset-2">
+                Workers
+              </Link>{" "}
+              page which drone runs this agent; automatic mode requires server{" "}
+              <code className="font-mono text-[11px]">HIVE_AUTO_PLACEMENT_ENABLED</code>.
+            </p>
+            <Field
+              label="Placement mode"
+              hint="Automatic: control plane may assign an eligible drone when unassigned."
+            >
+              <select
+                className={inputClass}
+                value={eff("runtime", "workerPlacementMode", props.agent.workerPlacementMode ?? "manual")}
+                onChange={(e) => mark("runtime", "workerPlacementMode", e.target.value)}
+              >
+                <option value="manual">Manual (operator binds drone)</option>
+                <option value="automatic">Automatic (pool pick when enabled)</option>
+              </select>
+            </Field>
+            <Field
+              label="Operational posture"
+              hint="Sandbox: only drones with labels.sandbox true. Hibernate/archive: no new runs."
+            >
+              <select
+                className={inputClass}
+                value={eff("runtime", "operationalPosture", props.agent.operationalPosture ?? "active")}
+                onChange={(e) => mark("runtime", "operationalPosture", e.target.value)}
+              >
+                <option value="active">Active</option>
+                <option value="hibernate">Hibernate</option>
+                <option value="archived">Archived</option>
+                <option value="sandbox">Sandbox</option>
+              </select>
+            </Field>
+          </div>
+        ) : null}
+
+      </div>
+
+      {/* ---- Run Policy ---- */}
+      {isCreate ? (
+        <div className={cn(!cards && "border-b border-border")}>
+          {cards
+            ? <h3 className="text-sm font-medium flex items-center gap-2 mb-3"><Heart className="h-3 w-3" /> Run Policy</h3>
+            : <div className="px-4 py-2 text-xs font-medium text-muted-foreground flex items-center gap-2"><Heart className="h-3 w-3" /> Run Policy</div>
+          }
+          <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
+            <ToggleWithNumber
+              label="Heartbeat on interval"
+              hint={help.heartbeatInterval}
+              checked={val!.heartbeatEnabled}
+              onCheckedChange={(v) => set!({ heartbeatEnabled: v })}
+              number={val!.intervalSec}
+              onNumberChange={(v) => set!({ intervalSec: v })}
+              numberLabel="sec"
+              numberPrefix="Run heartbeat every"
+              numberHint={help.intervalSec}
+              showNumber={val!.heartbeatEnabled}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className={cn(!cards && "border-b border-border")}>
+          {cards
+            ? <h3 className="text-sm font-medium flex items-center gap-2 mb-3"><Heart className="h-3 w-3" /> Run Policy</h3>
+            : <div className="px-4 py-2 text-xs font-medium text-muted-foreground flex items-center gap-2"><Heart className="h-3 w-3" /> Run Policy</div>
+          }
+          <div className={cn(cards ? "border border-border rounded-lg overflow-hidden" : "")}>
+            <div className={cn(cards ? "p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
+              <ToggleWithNumber
+                label="Heartbeat on interval"
+                hint={help.heartbeatInterval}
+                checked={eff("heartbeat", "enabled", heartbeat.enabled !== false)}
+                onCheckedChange={(v) => mark("heartbeat", "enabled", v)}
+                number={eff("heartbeat", "intervalSec", Number(heartbeat.intervalSec ?? 300))}
+                onNumberChange={(v) => mark("heartbeat", "intervalSec", v)}
+                numberLabel="sec"
+                numberPrefix="Run heartbeat every"
+                numberHint={help.intervalSec}
+                showNumber={eff("heartbeat", "enabled", heartbeat.enabled !== false)}
+              />
+            </div>
+            <CollapsibleSection
+              title="Advanced Run Policy"
+              bordered={cards}
+              open={runPolicyAdvancedOpen}
+              onToggle={() => setRunPolicyAdvancedOpen(!runPolicyAdvancedOpen)}
+            >
+            <div className="space-y-3">
+              <ToggleField
+                label="Wake on demand"
+                hint={help.wakeOnDemand}
+                checked={eff(
+                  "heartbeat",
+                  "wakeOnDemand",
+                  heartbeat.wakeOnDemand !== false,
+                )}
+                onChange={(v) => mark("heartbeat", "wakeOnDemand", v)}
+              />
+              <Field label="Cooldown (sec)" hint={help.cooldownSec}>
+                <DraftNumberInput
+                  value={eff(
+                    "heartbeat",
+                    "cooldownSec",
+                    Number(heartbeat.cooldownSec ?? 10),
+                  )}
+                  onCommit={(v) => mark("heartbeat", "cooldownSec", v)}
+                  immediate
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Max concurrent runs" hint={help.maxConcurrentRuns}>
+                <DraftNumberInput
+                  value={eff(
+                    "heartbeat",
+                    "maxConcurrentRuns",
+                    Number(heartbeat.maxConcurrentRuns ?? 1),
+                  )}
+                  onCommit={(v) => mark("heartbeat", "maxConcurrentRuns", v)}
+                  immediate
+                  className={inputClass}
+                />
+              </Field>
+            </div>
+          </CollapsibleSection>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+function AdapterEnvironmentResult({ result }: { result: AdapterEnvironmentTestResult }) {
+  const statusLabel =
+    result.status === "pass" ? "Passed" : result.status === "warn" ? "Warnings" : "Failed";
+  const statusClass =
+    result.status === "pass"
+      ? "text-green-700 dark:text-green-300 border-green-300 dark:border-green-500/40 bg-green-50 dark:bg-green-500/10"
+      : result.status === "warn"
+        ? "text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10"
+        : "text-red-700 dark:text-red-300 border-red-300 dark:border-red-500/40 bg-red-50 dark:bg-red-500/10";
+
+  return (
+    <div className={`rounded-md border px-3 py-2 text-xs ${statusClass}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">{statusLabel}</span>
+        <span className="text-[11px] opacity-80">
+          {new Date(result.testedAt).toLocaleTimeString()}
+        </span>
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {result.checks.map((check, idx) => (
+          <div key={`${check.code}-${idx}`} className="text-[11px] leading-relaxed wrap-break-word">
+            <span className="font-medium uppercase tracking-wide opacity-80">
+              {check.level}
+            </span>
+            <span className="mx-1 opacity-60">·</span>
+            <span>{check.message}</span>
+            {check.detail && <span className="block opacity-75 break-all">({check.detail})</span>}
+            {check.hint && <span className="block opacity-90 wrap-break-word">Hint: {check.hint}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---- Internal sub-components ---- */
+
+function EnvVarEditor({
+  value,
+  secrets,
+  onCreateSecret,
+  onChange,
+}: {
+  value: Record<string, EnvBinding>;
+  secrets: CompanySecret[];
+  onCreateSecret: (name: string, value: string) => Promise<CompanySecret>;
+  onChange: (env: Record<string, EnvBinding> | undefined) => void;
+}) {
+  type Row = {
+    key: string;
+    source: "plain" | "secret";
+    plainValue: string;
+    secretId: string;
+  };
+
+  function toRows(rec: Record<string, EnvBinding> | null | undefined): Row[] {
+    if (!rec || typeof rec !== "object") {
+      return [{ key: "", source: "plain", plainValue: "", secretId: "" }];
+    }
+    const entries = Object.entries(rec).map(([k, binding]) => {
+      if (typeof binding === "string") {
+        return {
+          key: k,
+          source: "plain" as const,
+          plainValue: binding,
+          secretId: "",
+        };
+      }
+      if (
+        typeof binding === "object" &&
+        binding !== null &&
+        "type" in binding &&
+        (binding as { type?: unknown }).type === "secret_ref"
+      ) {
+        const recBinding = binding as { secretId?: unknown };
+        return {
+          key: k,
+          source: "secret" as const,
+          plainValue: "",
+          secretId: typeof recBinding.secretId === "string" ? recBinding.secretId : "",
+        };
+      }
+      if (
+        typeof binding === "object" &&
+        binding !== null &&
+        "type" in binding &&
+        (binding as { type?: unknown }).type === "plain"
+      ) {
+        const recBinding = binding as { value?: unknown };
+        return {
+          key: k,
+          source: "plain" as const,
+          plainValue: typeof recBinding.value === "string" ? recBinding.value : "",
+          secretId: "",
+        };
+      }
+      return {
+        key: k,
+        source: "plain" as const,
+        plainValue: "",
+        secretId: "",
+      };
+    });
+    return [...entries, { key: "", source: "plain", plainValue: "", secretId: "" }];
+  }
+
+  const [rows, setRows] = useState<Row[]>(() => toRows(value));
+  const [sealError, setSealError] = useState<string | null>(null);
+  const valueRef = useRef(value);
+
+  // Sync when value identity changes (overlay reset after save)
+  useEffect(() => {
+    if (value !== valueRef.current) {
+      valueRef.current = value;
+      setRows(toRows(value));
+    }
+  }, [value]);
+
+  function emit(nextRows: Row[]) {
+    const rec: Record<string, EnvBinding> = {};
+    for (const row of nextRows) {
+      const k = row.key.trim();
+      if (!k) continue;
+      if (row.source === "secret") {
+        if (!row.secretId) continue;
+        rec[k] = { type: "secret_ref", secretId: row.secretId, version: "latest" };
+      } else {
+        rec[k] = { type: "plain", value: row.plainValue };
+      }
+    }
+    onChange(Object.keys(rec).length > 0 ? rec : undefined);
+  }
+
+  function updateRow(i: number, patch: Partial<Row>) {
+    const withPatch = rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r));
+    if (
+      withPatch[withPatch.length - 1].key ||
+      withPatch[withPatch.length - 1].plainValue ||
+      withPatch[withPatch.length - 1].secretId
+    ) {
+      withPatch.push({ key: "", source: "plain", plainValue: "", secretId: "" });
+    }
+    setRows(withPatch);
+    emit(withPatch);
+  }
+
+  function removeRow(i: number) {
+    const next = rows.filter((_, idx) => idx !== i);
+    if (
+      next.length === 0 ||
+      next[next.length - 1].key ||
+      next[next.length - 1].plainValue ||
+      next[next.length - 1].secretId
+    ) {
+      next.push({ key: "", source: "plain", plainValue: "", secretId: "" });
+    }
+    setRows(next);
+    emit(next);
+  }
+
+  function defaultSecretName(key: string): string {
+    return key
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 64);
+  }
+
+  async function sealRow(i: number) {
+    const row = rows[i];
+    if (!row) return;
+    const key = row.key.trim();
+    const plain = row.plainValue;
+    if (!key || plain.length === 0) return;
+
+    const suggested = defaultSecretName(key) || "secret";
+    const name = window.prompt("Secret name", suggested)?.trim();
+    if (!name) return;
+
+    try {
+      setSealError(null);
+      const created = await onCreateSecret(name, plain);
+      updateRow(i, {
+        source: "secret",
+        secretId: created.id,
+      });
+    } catch (err) {
+      setSealError(err instanceof Error ? err.message : "Failed to create secret");
+    }
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {rows.map((row, i) => {
+        const isTrailing =
+          i === rows.length - 1 &&
+          !row.key &&
+          !row.plainValue &&
+          !row.secretId;
+        return (
+          <div key={i} className="flex items-center gap-1.5">
+            <input
+              className={cn(inputClass, "flex-2")}
+              placeholder="KEY"
+              value={row.key}
+              onChange={(e) => updateRow(i, { key: e.target.value })}
+            />
+            <select
+              className={cn(inputClass, "flex-1 bg-background")}
+              value={row.source}
+              onChange={(e) =>
+                updateRow(i, {
+                  source: e.target.value === "secret" ? "secret" : "plain",
+                  ...(e.target.value === "plain" ? { secretId: "" } : {}),
+                })
+              }
+            >
+              <option value="plain">Plain</option>
+              <option value="secret">Secret</option>
+            </select>
+            {row.source === "secret" ? (
+              <>
+                <select
+                  className={cn(inputClass, "flex-3 bg-background")}
+                  value={row.secretId}
+                  onChange={(e) => updateRow(i, { secretId: e.target.value })}
+                >
+                  <option value="">Select secret...</option>
+                  {secrets.map((secret) => (
+                    <option key={secret.id} value={secret.id}>
+                      {secret.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 transition-colors shrink-0 cursor-pointer"
+                  onClick={() => sealRow(i)}
+                  disabled={!row.key.trim() || !row.plainValue}
+                  title="Create secret from current plain value"
+                >
+                  New
+                </button>
+              </>
+            ) : (
+              <>
+                <input
+                  className={cn(inputClass, "flex-3")}
+                  placeholder="value"
+                  value={row.plainValue}
+                  onChange={(e) => updateRow(i, { plainValue: e.target.value })}
+                />
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 transition-colors shrink-0 cursor-pointer"
+                  onClick={() => sealRow(i)}
+                  disabled={!row.key.trim() || !row.plainValue}
+                  title="Store value as secret and replace with reference"
+                >
+                  Seal
+                </button>
+              </>
+            )}
+            {!isTrailing ? (
+              <button
+                type="button"
+                className="shrink-0 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+                onClick={() => removeRow(i)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <div className="w-[26px] shrink-0" />
+            )}
+          </div>
+        );
+      })}
+      {sealError && <p className="text-[11px] text-destructive">{sealError}</p>}
+      <p className="text-[11px] text-muted-foreground/60">
+        HIVE_* variables are injected automatically at runtime.
+      </p>
+    </div>
+  );
+}
+

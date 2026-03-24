@@ -1,0 +1,132 @@
+# CocoIndex v1 + LanceDB (embedded) + llama.cpp (Qwen3-Embedding-8B) + DragonflyDB
+# Usage: 1) Download model to ./models/, 2) Put repo in ./myrepo/, 3) docker compose up -d
+# APIs: Indexing http://localhost:8080/index, Search http://localhost:8080/search
+
+version: "3.8"
+
+services:
+  # -----------------------------------------------------------------------------
+  # llama.cpp embedding server - Qwen3-Embedding-8B (MTEB #1 multilingual/code)
+  # -----------------------------------------------------------------------------
+  llama-embeddings:
+    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    container_name: cocoindex-llama
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./models:/models:ro
+      - llama-cache:/cache
+    command: >
+      --model /models/qwen3-embedding-8b-Q4_K_M.gguf
+      --embedding
+      --ctx-size 32768
+      --pooling-type mean
+      --host 0.0.0.0
+      --port 8080
+      --n-gpu-layers 999
+      --batch-size 512
+      --ubatch-size 512
+      --defrag-thold 0.1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - cocoindex-net
+
+  # -----------------------------------------------------------------------------
+  # DragonflyDB - High-performance Redis-compatible DB for Hive worker coordination
+  # Replaces Redis: 100x faster, persistent, drop-in compatible
+  # -----------------------------------------------------------------------------
+  dragonfly:
+    image: dragonflydb/dragonfly:latest
+    container_name: cocoindex-dragonfly
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - dragonfly-data:/data
+    command: --bind=0.0.0.0 --requirepass ${DRAGONFLY_PASSWORD:?DRAGONFLY_PASSWORD must be set}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cocoindex-net
+
+  # -----------------------------------------------------------------------------
+  # CocoIndex v1 - Tree-sitter chunking + LanceDB embedded + Qwen3 embeddings
+  # LanceDB runs inside this container (no separate service needed)
+  # -----------------------------------------------------------------------------
+  cocoindex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cocoindex
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./myrepo:/data/repos:ro
+      - cocoindex-data:/data/lancedb
+      - cocoindex-cache:/app/.cache
+    environment:
+      # Core indexing config
+      - COCOINDEX_REPOS_PATH=/data/repos
+      - COCOINDEX_LANCEDB_URI=/data/lancedb
+      - COCOINDEX_EMBEDDING_URL=http://llama-embeddings:8080/v1/embeddings
+      - COCOINDEX_EMBEDDING_MODEL=Qwen3-Embedding-8B
+      - COCOINDEX_EMBEDDING_DIM=4096
+      - COCOINDEX_EMBEDDING_BATCH_SIZE=32
+      
+      # API & behavior
+      - COCOINDEX_API_HOST=0.0.0.0
+      - COCOINDEX_API_PORT=8080
+      - COCOINDEX_INDEX_ON_STARTUP=true
+      - COCOINDEX_WATCH_REPOS=true
+      - COCOINDEX_LOG_LEVEL=info
+      
+      # Hive/Dragonfly integration — password injected from env, never hardcoded
+      - COCOINDEX_DRAGONFLY_URL=redis://:${DRAGONFLY_PASSWORD}@dragonfly:6379/0
+      # API token — must be set in .env (see .env.example), injected via K8s Secret in production
+      - COCOINDEX_API_TOKEN=${COCOINDEX_API_TOKEN:?COCOINDEX_API_TOKEN must be set}
+      - COCOINDEX_HIVE_NAMESPACE=default
+      
+      # Tree-sitter languages (auto-detect)
+      - COCOINDEX_LANGUAGES=python,typescript,javascript,rust,go
+      
+    depends_on:
+      llama-embeddings:
+        condition: service_healthy
+      dragonfly:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - cocoindex-net
+
+volumes:
+  lancedb-data:     # LanceDB persistence (embedded in cocoindex)
+  llama-cache:      # llama.cpp KV cache
+  cocoindex-cache:  # Tree-sitter grammars
+  dragonfly-data:   # Dragonfly persistence
+  cocoindex-data:
+
+networks:
+  cocoindex-net:
+    driver: bridge

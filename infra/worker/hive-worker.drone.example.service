@@ -1,0 +1,25 @@
+# Example systemd unit for hive-worker on a VPS (adjust paths and User=).
+# Install binary to /usr/local/bin/hive-worker and create state dir owned by the service user.
+#
+#   sudo cp hive-worker.drone.example.service /etc/systemd/system/hive-worker.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now hive-worker
+
+[Unit]
+Description=Hive drone (hive-worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/hive-worker/environment
+ExecStart=/usr/local/bin/hive-worker
+Restart=on-failure
+RestartSec=5
+# Dedicated user (create with: useradd -r -s /usr/sbin/nologin hive-worker)
+User=hive-worker
+Group=hive-worker
+StateDirectory=hive-worker
+# Map to HIVE_WORKER_STATE_DIR if you use StateDirectory=hive-worker -> /var/lib/hive-worker
+
+[Install]
+WantedBy=multi-user.target

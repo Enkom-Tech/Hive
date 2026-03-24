@@ -1,0 +1,70 @@
+name: hive-worker release build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.7)"
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: worker-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infra/worker/go.mod
+
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            T="${{ inputs.tag }}"
+          else
+            T="${GITHUB_REF#refs/tags/}"
+          fi
+          T="${T#v}"
+          echo "ver=$T" >> "$GITHUB_OUTPUT"
+          echo "version_tag=v${T}" >> "$GITHUB_OUTPUT"
+          echo "Building v${T}"
+
+      - name: Go test (worker)
+        shell: bash
+        working-directory: infra/worker
+        run: go test ./...
+
+      - name: Build release bundles
+        shell: bash
+        run: |
+          chmod +x infra/worker/scripts/build-release.sh
+          infra/worker/scripts/build-release.sh "v${{ steps.meta.outputs.ver }}"
+
+      - name: Publish GitHub release assets (on tag push)
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version_tag }}
+          files: infra/worker/dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-worker-dist-${{ steps.meta.outputs.ver }}
+          path: infra/worker/dist/*

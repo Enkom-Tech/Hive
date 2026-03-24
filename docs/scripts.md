@@ -11,3 +11,5 @@ Scripts in `infra/scripts/` and when to use them.
 | **format-juicefs.sh** | Format a JuiceFS volume for the operator. Run once per cluster after storage manifests are applied; required before HiveCompany CRs that use JuiceFS StorageClass | From `infra/`: `JUICEFS_META_URL=... JUICEFS_STORAGE=... ./scripts/format-juicefs.sh [--dry-run]` | **Required:** `JUICEFS_META_URL` (e.g. redis://localhost:6379/0), `JUICEFS_STORAGE` (e.g. minio://bucket). Optional: `JUICEFS_NAME` (default hive-fs). JuiceFS CLI must be in PATH. |
 
 Order for a new cluster (run from `infra/`): bootstrap-vps → apply `manifests/storage/` → format-juicefs → deploy operator → create-tenant.
+
+For full k3s + LLM setup (vLLM, model gateway, LM Studio), see [control-plane/doc/K3S-LLM-DEPLOYMENT.md](../control-plane/doc/K3S-LLM-DEPLOYMENT.md).

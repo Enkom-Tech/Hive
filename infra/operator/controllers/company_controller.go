@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	hivev1alpha1 "github.com/enkom/hive-operator/api/v1alpha1"
+	hivev1alpha1 "github.com/Enkom-Tech/hive-operator/api/v1alpha1"
 )
 
 // HiveCompanyReconciler reconciles a HiveCompany object.
@@ -90,7 +90,7 @@ func (r *HiveCompanyReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			StorageClassName: &company.Spec.StorageClass,
-			Resources: corev1.ResourceRequirements{
+			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: resource.MustParse(company.Spec.StorageSize),
 				},
@@ -125,28 +125,60 @@ func (r *HiveCompanyReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	udp := corev1.ProtocolUDP
 	port := func(p int) *intstr.IntOrString { x := intstr.FromInt(p); return &x }
-	np := &netv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Namespace: tenantNS, Name: "hive-tenant-default"},
-		Spec: netv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{},
-			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeIngress, netv1.PolicyTypeEgress},
-			Ingress: []netv1.NetworkPolicyIngressRule{{
-				From: []netv1.NetworkPolicyPeer{{
-					NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/system": "true"}},
-				}},
+
+	// NetworkPolicy for the tenant namespace.
+	// Ingress rules:
+	//   1. Operator health checks: allow from hive-system on 8080.
+	//   2. Workers → MCP gateway: allow pods with hive.io/role=worker to reach port 9090.
+	//   3. Gateway → indexer: allow pods with hive.io/role=mcp-gateway to reach port 8080.
+	//      Workers cannot reach the indexer on 8080 directly (no matching rule).
+	// Egress rules:
+	//   1. DNS to kube-system.
+	//   2. Storage: MinIO (9000), DragonflyDB (6379) in hive-storage.
+	//   3. External: HTTPS (443), Loki (3100).
+	//   4. Workers → gateway: allow egress to pods with hive.io/role=mcp-gateway on 9090.
+	//   5. Gateway → indexer: allow egress to pods with hive.io/role=indexer on 8080.
+	npSpec := netv1.NetworkPolicySpec{
+		PodSelector: metav1.LabelSelector{},
+		PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeIngress, netv1.PolicyTypeEgress},
+		Ingress: []netv1.NetworkPolicyIngressRule{
+			{
+				From:  []netv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/system": "true"}}}},
 				Ports: []netv1.NetworkPolicyPort{{Port: port(8080)}},
-			}},
-			Egress: []netv1.NetworkPolicyEgressRule{
-				{To: []netv1.NetworkPolicyPeer{{
-					NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}},
-				}}, Ports: []netv1.NetworkPolicyPort{{Port: port(53), Protocol: &udp}}},
-				{To: []netv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/storage": "true"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(9000)}, {Port: port(6379)}}},
-				{To: []netv1.NetworkPolicyPeer{{IPBlock: &netv1.IPBlock{CIDR: "0.0.0.0/0"}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(443)}, {Port: port(3100)}}},
+			},
+			{
+				From:  []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "worker"}}}},
+				Ports: []netv1.NetworkPolicyPort{{Port: port(9090)}},
+			},
+			{
+				From:  []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "mcp-gateway"}}}},
+				Ports: []netv1.NetworkPolicyPort{{Port: port(8080)}},
 			},
 		},
+		Egress: []netv1.NetworkPolicyEgressRule{
+			{To: []netv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(53), Protocol: &udp}}},
+			{To: []netv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/storage": "true"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(9000)}, {Port: port(6379)}}},
+			{To: []netv1.NetworkPolicyPeer{{IPBlock: &netv1.IPBlock{CIDR: "0.0.0.0/0"}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(443)}, {Port: port(3100)}}},
+			{To: []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "mcp-gateway"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(9090)}}},
+			{To: []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "indexer"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(8080)}}},
+		},
 	}
-	if err := r.Create(ctx, np); err != nil && !errors.IsAlreadyExists(err) {
-		logger.Error(err, "create NetworkPolicy failed")
+	np := &netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: tenantNS, Name: "hive-tenant-default"},
+		Spec:       npSpec,
+	}
+	if err := r.Create(ctx, np); err != nil {
+		if errors.IsAlreadyExists(err) {
+			existing := &netv1.NetworkPolicy{}
+			if r.Get(ctx, client.ObjectKey{Namespace: tenantNS, Name: "hive-tenant-default"}, existing) == nil {
+				existing.Spec = npSpec
+				if err := r.Update(ctx, existing); err != nil {
+					logger.Error(err, "update NetworkPolicy failed")
+				}
+			}
+		} else {
+			logger.Error(err, "create NetworkPolicy failed")
+		}
 	}
 
 	company.Status.LastSyncAt = metav1.Now().Format(time.RFC3339)

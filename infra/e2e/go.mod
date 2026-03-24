@@ -1,3 +1,3 @@
-module github.com/enkom/hive-e2e
+module github.com/Enkom-Tech/hive-e2e
 
 go 1.26.1

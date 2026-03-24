@@ -1,0 +1,40 @@
+# Reference stack: hive-worker as a drone (Docker / VPS).
+# Copy .env.drone.example to .env.drone, fill secrets, then:
+#   docker compose -f docker-compose.drone.yml --env-file .env.drone up -d
+#
+# Contract (see control-plane/docs/deploy/worker-deployment-matrix.md):
+# - Outbound HTTPS/WSS to the control plane (no inbound except health/metrics).
+# - After first link, prefer persisted link token over HIVE_DRONE_PROVISION_TOKEN.
+#
+# Optional: set HIVE_PROVISION_MANIFEST_URL to your board, e.g.
+#   https://YOUR_BOARD/api/companies/<companyId>/worker-runtime/manifest
+# with Authorization: Bearer <hive_dpv_...> or agent key (see workers API docs).
+
+services:
+  hive-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hive-worker:local
+    restart: unless-stopped
+    env_file:
+      - .env.drone
+    environment:
+      # Defaults if not in .env.drone (must include colon for listen.go)
+      HIVE_WORKER_HTTP_ADDR: ${HIVE_WORKER_HTTP_ADDR:-:8080}
+      # Persist lazy-downloaded adapter binaries on the hive-worker-cache volume
+      HIVE_PROVISION_CACHE_DIR: /cache
+    ports:
+      - "${HIVE_WORKER_PUBLISH_PORT:-8080}:8080"
+    volumes:
+      - hive-worker-state:/state
+      - hive-worker-workspace:/workspace/repo
+      - hive-worker-cache:/cache
+    # Default image is distroless (no shell). For apt/npm install hooks in manifest,
+    # use a custom image based on Debian/Alpine or bake tools into the image.
+    user: "65532:65532"
+
+volumes:
+  hive-worker-state:
+  hive-worker-workspace:
+  hive-worker-cache:

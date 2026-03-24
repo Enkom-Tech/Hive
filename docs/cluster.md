@@ -8,7 +8,7 @@ Layout of `infra/cluster/` and how ArgoCD syncs Hive infra from the repo.
 - **Role:** Single ArgoCD Application that points at `infra/cluster/applications`. Install this Application once (e.g. `kubectl apply -f infra/cluster/bootstrap/argocd-app-of-apps.yaml` from repo root against a cluster that already has ArgoCD). ArgoCD then syncs the `applications/` directory; each YAML there becomes a child Application.
 
 The bootstrap Application uses:
-- **repoURL:** `https://github.com/enkom/paperclip`
+- **repoURL:** `https://github.com/Enkom-Tech/Hive`
 - **path:** `infra/cluster/applications`
 - **targetRevision:** HEAD
 
@@ -29,3 +29,5 @@ So after bootstrap, ArgoCD manages: operator deployment, storage (MinIO, Dragonf
 
 - **Path:** `infra/cluster/tenants/example/`
 - **Role:** Example HiveCompany and HiveWorkerPool CRs. These are plain Kubernetes manifests, not ArgoCD Applications. Use them as templates; apply manually (e.g. `kubectl apply -f infra/cluster/tenants/example/` from repo root) or via scripts (e.g. `infra/scripts/create-tenant.sh`). Tenant CRs live in `hive-system` and are reconciled by the Hive operator.
+
+Optional LLM stack (vLLM, model gateway, worker model URL) and deploy order are described in [control-plane/doc/K3S-LLM-DEPLOYMENT.md](../control-plane/doc/K3S-LLM-DEPLOYMENT.md).

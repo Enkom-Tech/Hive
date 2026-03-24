@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-gateway
+  labels:
+    app: model-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-gateway
+  template:
+    metadata:
+      labels:
+        app: model-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: model-gateway:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CONFIG_PATH
+              value: /etc/model-gateway/models.json
+          volumeMounts:
+            - name: models
+              mountPath: /etc/model-gateway
+              readOnly: true
+          ports:
+            - containerPort: 8080
+              name: http
+          livenessProbe:
+            httpGet:
+              port: 8080
+              path: /health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              port: 8080
+              path: /health
+            initialDelaySeconds: 2
+            periodSeconds: 5
+      volumes:
+        - name: models
+          configMap:
+            name: model-gateway-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-gateway
+  labels:
+    app: model-gateway
+spec:
+  selector:
+    app: model-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http

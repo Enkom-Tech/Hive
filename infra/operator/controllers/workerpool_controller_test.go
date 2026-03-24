@@ -13,9 +13,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	hivev1alpha1 "github.com/enkom/hive-operator/api/v1alpha1"
-	"github.com/enkom/hive-operator/internal/testutil"
+	hivev1alpha1 "github.com/Enkom-Tech/hive-operator/api/v1alpha1"
+	"github.com/Enkom-Tech/hive-operator/internal/testutil"
 )
 
 var _ = Describe("WorkerPool controller", func() {
@@ -44,8 +45,8 @@ var _ = Describe("WorkerPool controller", func() {
 
 		// Start manager
 		mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-			Scheme:             testScheme,
-			MetricsBindAddress: "0",
+			Scheme:  testScheme,
+			Metrics: metricsserver.Options{BindAddress: "0"},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect((&HiveClusterReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}).SetupWithManager(mgr)).To(Succeed())
@@ -98,6 +99,7 @@ var _ = Describe("WorkerPool controller", func() {
 		}, 15*time.Second, 500*time.Millisecond).Should(Succeed())
 		Expect(*dep.Spec.Replicas).To(Equal(int32(1)))
 		Expect(dep.Spec.Template.Spec.Containers[0].Image).To(Equal("hive-worker:test"))
+		Expect(dep.Spec.Template.Spec.Containers[0].ImagePullPolicy).To(Equal(corev1.PullAlways))
 
 		// Wait for Service
 		svc := &corev1.Service{}
@@ -121,5 +123,22 @@ var _ = Describe("WorkerPool controller", func() {
 			_ = k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "pool1"}, pool2)
 			return pool2.Status.HealthyAgents
 		}, 5*time.Second, 200*time.Millisecond).Should(Equal(int32(1)))
+
+		// When ModelGatewayURL is set, Deployment env should include HIVE_MODEL_GATEWAY_URL
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "pool1"}, pool2)).To(Succeed())
+		pool2.Spec.ModelGatewayURL = "http://model-gateway:8080/v1"
+		Expect(k8sClient.Update(ctx, pool2)).To(Succeed())
+		Eventually(func() bool {
+			d := &appsv1.Deployment{}
+			if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: tenantNS, Name: "pool1"}, d); err != nil {
+				return false
+			}
+			for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "HIVE_MODEL_GATEWAY_URL" && e.Value == "http://model-gateway:8080/v1" {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 500*time.Millisecond).Should(BeTrue())
 	})
 })

@@ -6,19 +6,19 @@ Copyright (C) 2025 Enkom.
 
 ## AGPL-3.0 compliance
 
-Hive-Infra is open-source infrastructure for Hive worker orchestration (Kubernetes operator, K3s, JuiceFS, DragonflyDB, GitOps). Whether your use or integration triggers AGPL-3.0 obligations is your responsibility.
+Hive is open-source infrastructure for Hive worker orchestration (Kubernetes operator, K3s, JuiceFS, DragonflyDB, GitOps). Whether your use or integration triggers AGPL-3.0 obligations is your responsibility.
 
 We recommend consulting legal or licensing advice to ensure your use of this software and any integrated projects complies with their licenses.
 
-If your use triggers AGPL-3.0 obligations and you wish to avoid them (for example, you do not plan to open-source your modifications or application), contact Enkom to discuss commercial licensing options. Using Hive-Infra without verifying your license compliance is at your own risk.
+If your use triggers AGPL-3.0 obligations and you wish to avoid them (for example, you do not plan to open-source your modifications or application), contact Enkom to discuss commercial licensing options. Using Hive without verifying your license compliance is at your own risk.
 
 ## Scope
 
-The entire *Hive-Infra* repository is under AGPL-3.0. There are no exceptions or alternative licenses for subdirectories.
+The entire *Hive* repository is under AGPL-3.0. There are no exceptions or alternative licenses for subdirectories.
 
 ## Third-party components
 
-Hive-Infra orchestrates or references the following upstream projects. They are not part of this repository and have their own licenses. We do not distribute or relicense them.
+Hive orchestrates or references the following upstream projects. They are not part of this repository and have their own licenses. We do not distribute or relicense them.
 
 | Component     | License | Notes |
 |---------------|---------|--------|

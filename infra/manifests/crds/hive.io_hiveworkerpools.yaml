@@ -45,6 +45,9 @@ spec:
                   type: object
                   additionalProperties:
                     type: string
+                modelGatewayURL:
+                  type: string
+                  description: OpenAI-compatible base URL for LLM inference (e.g. model gateway). When set, the worker receives HIVE_MODEL_GATEWAY_URL.
             status:
               type: object
               properties:

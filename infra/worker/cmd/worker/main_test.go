@@ -24,7 +24,7 @@ func TestRunServerStartupAndShutdown(t *testing.T) {
 		_ = Run(ctx, &Config{
 			Listener:            listener,
 			HealthWorkspacePath: dir,
-		})
+		}, nil)
 		close(runDone)
 	}()
 	defer listener.Close()
@@ -71,7 +71,7 @@ func TestRunServerMetricsEndpoint(t *testing.T) {
 		_ = Run(ctx, &Config{
 			Listener:            listener,
 			HealthWorkspacePath: dir,
-		})
+		}, nil)
 		close(runDone)
 	}()
 	defer func() { cancel(); <-runDone; listener.Close() }()
@@ -113,7 +113,7 @@ func TestRunHealthUnavailableWhenWorkspaceMissing(t *testing.T) {
 		_ = Run(ctx, &Config{
 			Listener:            listener,
 			HealthWorkspacePath: badPath,
-		})
+		}, nil)
 		close(runDone)
 	}()
 	defer func() { cancel(); <-runDone; listener.Close() }()

@@ -16,5 +16,6 @@ func init() {
 		&HiveCluster{}, &HiveClusterList{},
 		&HiveCompany{}, &HiveCompanyList{},
 		&HiveWorkerPool{}, &HiveWorkerPoolList{},
+		&HiveIndexer{}, &HiveIndexerList{},
 	)
 }
