@@ -10,8 +10,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26.1'
       - name: Lint operator
@@ -33,8 +33,8 @@ jobs:
   test-unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26.1'
       - name: Test operator
@@ -48,8 +48,8 @@ jobs:
   test-integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26.1'
       - name: Integration tests (operator envtest)
@@ -59,8 +59,8 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26.1'
       - name: gosec operator
@@ -85,8 +85,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26.1'
       - name: Build operator
@@ -103,13 +103,12 @@ jobs:
       - name: Docker build worker
         run: |
           docker build -t hive-worker:latest infra/worker
-      - name: Trivy scan operator
-        uses: aquasecurity/trivy-action@master
+      - name: Grype scan operator
+        uses: anchore/scan-action@v6
         with:
-          image-ref: 'hive-operator:latest'
-          format: 'table'
-          exit-code: '0'
-        continue-on-error: true
+          image: 'hive-operator:latest'
+          fail-build: false
+          severity-cutoff: critical
 
   # ---------------------------------------------------------------------------
   # CocoIndex — Python semantic code indexing service
@@ -122,8 +121,8 @@ jobs:
       run:
         working-directory: infra/cocoindex-lancedb
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -159,17 +158,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: cocoindex-lint-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Docker build cocoindex
         run: docker build -t cocoindex:latest infra/cocoindex-lancedb
 
-      - name: Trivy scan cocoindex
-        uses: aquasecurity/trivy-action@master
+      - name: Grype scan cocoindex
+        uses: anchore/scan-action@v6
         with:
-          image-ref: 'cocoindex:latest'
-          format: 'table'
-          # Fail on HIGH/CRITICAL — stricter than the Go operator job (exit-code 0)
+          image: 'cocoindex:latest'
+          # Fail on HIGH/CRITICAL — stricter than the Go operator job (fail-build: false)
           # because this is a new service and should have a clean baseline.
-          exit-code: '1'
-          severity: 'HIGH,CRITICAL'
+          fail-build: true
+          severity-cutoff: high
