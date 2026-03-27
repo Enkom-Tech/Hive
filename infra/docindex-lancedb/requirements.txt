@@ -7,7 +7,7 @@
 fastapi>=0.115.0,<0.121.0
 # Plain uvicorn only: uvicorn[standard] pulls uvloop without == pins, which breaks hash-locked installs in Docker.
 # On Linux, `uvicorn[standard]` / uvloop remains optional for non-hash local installs or a future constraints split.
-uvicorn>=0.30.0,<0.36.0
+uvicorn>=0.30.0,<0.43.0
 # 0.22+ fixes Pydantic v2 deprecation in LanceDB query models (lancedb#2315).
 lancedb>=0.22.0,<0.31.0
 pyarrow>=17.0.0,<21.0.0
