@@ -40,7 +40,7 @@
     "@hive/db": "workspace:*",
     "@hive/plugin-sdk": "workspace:*",
     "@hive/shared": "workspace:*",
-    "better-auth": "^1.5.4",
+    "better-auth": "^1.5.6",
     "cors": "^2.8.5",
     "detect-port": "^2.1.0",
     "dotenv": "^17.3.1",
