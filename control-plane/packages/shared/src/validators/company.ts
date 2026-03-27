@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { COMPANY_STATUSES } from "../constants.js";
+import { COMPANY_STATUSES, IDENTITY_SELF_TUNE_POLICIES } from "../constants.js";
 
 /** Optional query schema for routes that resolve by shortname (e.g. GET /projects/:id with companyId query). */
 export const optionalCompanyIdQuerySchema = z.object({
@@ -27,6 +27,9 @@ export const updateCompanySchema = createCompanySchema
     brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
     /** JSON string: per-company hive-worker runtime manifest (adapter URLs, checksums). Null clears. */
     workerRuntimeManifestJson: z.string().max(512_000).nullable().optional(),
+    modelTrainingRunnerUrl: z.string().url().max(2048).nullable().optional(),
+    identitySelfTunePolicy: z.enum(IDENTITY_SELF_TUNE_POLICIES).optional(),
+    requireApprovalForModelPromotion: z.boolean().optional(),
   });
 
 export type UpdateCompany = z.infer<typeof updateCompanySchema>;

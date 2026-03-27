@@ -106,7 +106,10 @@ export interface Config {
    */
   workerJwtSecret: string | undefined;
   /**
-   * When set, enables POST /api/internal/hive/inference-metering with Bearer auth for router-side ledger writes.
+   * When set, enables operator-only internal routes: gateway virtual key lookup and POST
+   * /api/internal/hive/inference-metering (Bearer) for router-side ledger writes.
+   * Training runner callbacks at POST /api/internal/hive/model-training-callback are always mounted and use
+   * the per-run callback token; this secret is optional break-glass auth for those callbacks.
    */
   internalHiveOperatorSecret: string | undefined;
   /** Enables POST /api/internal/plugin-host/rpc (Bearer) for OOP plugin workers. */

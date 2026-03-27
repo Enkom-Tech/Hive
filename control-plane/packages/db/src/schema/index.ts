@@ -51,3 +51,4 @@ export { workerApiIdempotency } from "./worker_api_idempotency.js";
 export { vcsWebhookDeliveries } from "./vcs_webhook_deliveries.js";
 export { pluginPackages } from "./plugin_packages.js";
 export { pluginInstances } from "./plugin_instances.js";
+export { modelTrainingRuns } from "./model_training_runs.js";

@@ -137,6 +137,9 @@ Human auth tables (`users`, `sessions`, and provider-specific auth artifacts) ar
 - `description` text null
 - `status` enum: `active | paused | archived`
 - `require_quality_review_for_done` boolean not null default false (default for task-level quality gate when issue.requires_quality_review is null)
+- `model_training_runner_url` text null (overrides deployment default for training dispatch)
+- `identity_self_tune_policy` text not null default `disabled` (`disabled` | `approval_required` | `auto_dispatch` — reserved for worker-initiated flows)
+- `require_approval_for_model_promotion` boolean not null default false
 
 Invariant: every business record belongs to exactly one company.
 
@@ -156,6 +159,7 @@ Invariant: every business record belongs to exactly one company.
 - `budget_monthly_cents` int not null default 0
 - `spent_monthly_cents` int not null default 0
 - `last_heartbeat_at` timestamptz null
+- `identity_self_tune_policy` text null (inherits company when null)
 
 Invariants:
 
@@ -271,7 +275,7 @@ Invariant: each event must attach to agent and company; rollups are aggregation,
 
 - `id` uuid pk
 - `company_id` uuid fk not null
-- `type` enum: `hire_agent | approve_ceo_strategy | quality_review`
+- `type` enum: `hire_agent | approve_ceo_strategy | quality_review | promote_model`
 - `requested_by_agent_id` uuid fk `agents.id` null
 - `requested_by_user_id` uuid fk `users.id` null
 - `status` enum: `pending | approved | rejected | cancelled`
@@ -354,6 +358,13 @@ Deterministic intent folding normalizes and folds user/agent requests into canon
 
 - **intents:** `id` uuid pk, `company_id` uuid fk not null, `source` text (e.g. `board` | `agent` | `api`), `raw_text` text, `normalized_text` text, `intent_type` text (e.g. `create_issue`), `state` text (`open` | `folded` | `closed` | `rejected`), `canonical_key` text not null, `created_at` / `updated_at` timestamptz. Invariant: company-scoped; folding matches on (company_id, canonical_key) for open intents.
 - **intent_links:** `id` uuid pk, `intent_id` uuid fk intents not null, `company_id` uuid fk not null, `entity_type` text (`issue` | `goal` | `project` | `heartbeat_run` | …), `entity_id` text, `link_type` text (`primary` | `duplicate` | `related`), `created_at` timestamptz. Invariant: writes to intents and intent_links occur in the same transaction as the linked entity (e.g. issue creation).
+
+## 7.16 `model_training_runs` (identity model improvement)
+
+Orchestrated fine-tuning / RL jobs that promote new OpenAI-compatible inference routes per company. See [adr/008-model-training-runs.md](adr/008-model-training-runs.md).
+
+- `id` uuid pk, `company_id` fk, `deployment_id` fk (denormalized), optional `agent_id`, optional `source_inference_model_id` fk `inference_models`, `proposed_model_slug` text, `status` (`queued` | `dispatched` | `running` | `succeeded` | `failed` | `cancelled` | `promoted`), `runner_kind`, optional `runner_target_url`, `external_job_ref`, `result_base_url`, `result_metadata` jsonb, `last_callback_digest`, optional `promoted_inference_model_id`, `promoted_at`, `error`, `callback_token_hash` (SHA-256 of per-run secret), optional `dataset_filter_spec`, optional `idempotency_key` (unique per company when set), timestamps.
+- **Dataset export** (board or callback token): NDJSON stream of `type: heartbeat_run` lines, then one `type: cost_aggregate` line (`cost_events` sums; window from `dataset_filter_spec.costOccurredAfter` / `costOccurredBefore` or default 90 days). Other `dataset_filter_spec` keys include `maxRuns` (heartbeat row cap).
 
 ## 8. State Machines
 

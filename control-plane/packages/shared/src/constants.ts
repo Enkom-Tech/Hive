@@ -216,7 +216,12 @@ export const PROJECT_COLORS = [
   "#3b82f6", // blue
 ] as const;
 
-export const APPROVAL_TYPES = ["hire_agent", "approve_ceo_strategy", "quality_review"] as const;
+export const APPROVAL_TYPES = [
+  "hire_agent",
+  "approve_ceo_strategy",
+  "quality_review",
+  "promote_model",
+] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 
 export const APPROVAL_STATUSES = [
@@ -370,6 +375,7 @@ export const PERMISSION_KEYS = [
   "goals:write",
   "issues:write",
   "joins:approve",
+  "models:train",
   "plugins:manage",
   "projects:write",
   "runs:board",
@@ -380,3 +386,23 @@ export const PERMISSION_KEYS = [
   "users:manage_permissions",
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
+
+export const MODEL_TRAINING_RUN_STATUSES = [
+  "queued",
+  "dispatched",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "promoted",
+] as const;
+export type ModelTrainingRunStatus = (typeof MODEL_TRAINING_RUN_STATUSES)[number];
+
+export const MODEL_TRAINING_RUNNER_KINDS = ["http_json", "agentscope"] as const;
+export type ModelTrainingRunnerKind = (typeof MODEL_TRAINING_RUNNER_KINDS)[number];
+
+export const IDENTITY_SELF_TUNE_POLICIES = ["disabled", "approval_required", "auto_dispatch"] as const;
+export type IdentitySelfTunePolicy = (typeof IDENTITY_SELF_TUNE_POLICIES)[number];
+
+/** Canonical `agents.runtime_config` key for default OpenAI-style model id (model-gateway slug). */
+export const AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY = "defaultModelSlug";

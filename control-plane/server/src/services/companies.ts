@@ -23,6 +23,7 @@ import {
   invites,
   principalPermissionGrants,
   companyMemberships,
+  modelTrainingRuns,
 } from "@hive/db";
 
 export function companyService(db: Db) {
@@ -120,6 +121,7 @@ export function companyService(db: Db) {
         await tx.delete(issues).where(eq(issues.companyId, id));
         await tx.delete(goals).where(eq(goals.companyId, id));
         await tx.delete(projects).where(eq(projects.companyId, id));
+        await tx.delete(modelTrainingRuns).where(eq(modelTrainingRuns.companyId, id));
         await tx.delete(agents).where(eq(agents.companyId, id));
         await tx.delete(activityLog).where(eq(activityLog.companyId, id));
         const rows = await tx

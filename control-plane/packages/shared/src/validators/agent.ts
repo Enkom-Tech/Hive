@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { AGENT_ICON_NAMES, AGENT_ROLES, AGENT_STATUSES } from "../constants.js";
+import {
+  AGENT_ICON_NAMES,
+  AGENT_ROLES,
+  AGENT_STATUSES,
+  AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY,
+  IDENTITY_SELF_TUNE_POLICIES,
+} from "../constants.js";
 import { envConfigSchema } from "./secret.js";
 
 export const agentPermissionsSchema = z.object({
@@ -57,6 +63,21 @@ export const updateAgentSchema = createAgentSchema
     workerPlacementMode: z.enum(["manual", "automatic"]).optional(),
     /** Lifecycle / isolation posture for managed_worker scheduling (ADR 005). */
     operationalPosture: z.enum(["active", "archived", "hibernate", "sandbox"]).optional(),
+    /** Sets `runtime_config.defaultModelSlug` for model-gateway routing when run context omits model. */
+    defaultModelSlug: z.string().min(1).max(512).nullable().optional(),
+    identitySelfTunePolicy: z.enum(IDENTITY_SELF_TUNE_POLICIES).nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.runtimeConfig && AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY in data.runtimeConfig) {
+      const v = (data.runtimeConfig as Record<string, unknown>)[AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY];
+      if (v !== undefined && v !== null && typeof v !== "string") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `runtime_config.${AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY} must be a string or null`,
+          path: ["runtimeConfig", AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY],
+        });
+      }
+    }
   });
 
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;

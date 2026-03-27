@@ -13,6 +13,16 @@ export {
   type CreateGatewayVirtualKey,
 } from "./inference.js";
 export {
+  trainingResultEvalSchema,
+  createModelTrainingRunSchema,
+  promoteModelTrainingRunSchema,
+  modelTrainingCallbackBodySchema,
+  listModelTrainingRunsQuerySchema,
+  type CreateModelTrainingRun,
+  type PromoteModelTrainingRun,
+  type ModelTrainingCallbackBody,
+} from "./model-training.js";
+export {
   portabilityIncludeSchema,
   portabilitySecretRequirementSchema,
   portabilityCompanyManifestEntrySchema,

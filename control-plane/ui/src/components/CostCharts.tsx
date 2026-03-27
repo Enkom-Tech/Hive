@@ -144,7 +144,9 @@ export function CostByModelChart({ byModel }: { byModel: CostByModel[] }) {
               ))}
             </Pie>
             <Tooltip
-              formatter={(value: number) => formatCents(value)}
+              formatter={(value) =>
+                formatCents(typeof value === "number" ? value : Number(value ?? 0))
+              }
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const item = payload[0].payload as (typeof pieData)[0];

@@ -3,9 +3,10 @@ import { z } from "zod";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { gatewayVirtualKeys } from "@hive/db";
-import { createCostEventSchema } from "@hive/shared";
+import { createCostEventSchema, modelTrainingCallbackBodySchema } from "@hive/shared";
 import { validate } from "../middleware/validate.js";
 import { costService } from "../services/costs.js";
+import { modelTrainingService } from "../services/model-training.js";
 import { unauthorized } from "../errors.js";
 
 const inferenceMeteringBodySchema = createCostEventSchema.extend({
@@ -21,29 +22,56 @@ const gatewayVirtualKeyLookupQuerySchema = z
     message: "Provide keyHash or bifrostVirtualKeyId",
   });
 
-/**
- * Internal webhooks (router / gateway → control plane ledger).
- * Requires Authorization: Bearer <HIVE_INTERNAL_OPERATOR_SECRET>.
- */
-export function internalHiveRoutes(
-  db: Db,
-  opts: { operatorSecret: string },
-): Router {
-  const router = Router();
-  const costs = costService(db);
-
-  function requireOperatorSecret(req: Request, _res: Response, next: NextFunction): void {
+function requireOperatorSecret(secret: string) {
+  return function operatorSecretMiddleware(req: Request, _res: Response, next: NextFunction): void {
     const h = req.headers.authorization;
     const tok =
       typeof h === "string" && h.toLowerCase().startsWith("bearer ") ? h.slice(7).trim() : "";
-    if (!tok || tok !== opts.operatorSecret) {
+    if (!tok || tok !== secret) {
       next(unauthorized("Invalid internal operator token"));
       return;
     }
     next();
-  }
+  };
+}
 
-  router.get("/gateway-virtual-key-lookup", requireOperatorSecret, async (req, res, next) => {
+/**
+ * Training runner callbacks: Bearer per-run token (from dispatch) or optional operator secret.
+ * Mounted at /api/internal/hive even when HIVE_INTERNAL_OPERATOR_SECRET is unset so runners work token-only.
+ */
+export function internalHiveTrainingCallbackRoutes(
+  db: Db,
+  opts?: { internalOperatorSecret?: string },
+): Router {
+  const router = Router();
+  const training = modelTrainingService(db, {
+    internalOperatorSecret: opts?.internalOperatorSecret?.trim() || undefined,
+  });
+
+  router.post("/model-training-callback", validate(modelTrainingCallbackBodySchema), async (req, res, next) => {
+    try {
+      const body = req.body as z.infer<typeof modelTrainingCallbackBodySchema>;
+      const row = await training.applyCallback(body, req.headers.authorization);
+      const { callbackTokenHash: _omit, ...safe } = row;
+      res.json(safe);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  return router;
+}
+
+/**
+ * Internal webhooks that require Authorization: Bearer <HIVE_INTERNAL_OPERATOR_SECRET>
+ * (gateway virtual key lookup, inference metering).
+ */
+export function internalHiveOperatorRoutes(db: Db, opts: { operatorSecret: string }): Router {
+  const router = Router();
+  const costs = costService(db);
+  const requireSecret = requireOperatorSecret(opts.operatorSecret);
+
+  router.get("/gateway-virtual-key-lookup", requireSecret, async (req, res, next) => {
     try {
       const q = gatewayVirtualKeyLookupQuerySchema.parse(req.query);
       const keyHash = q.keyHash?.trim();
@@ -76,7 +104,7 @@ export function internalHiveRoutes(
 
   router.post(
     "/inference-metering",
-    requireOperatorSecret,
+    requireSecret,
     validate(inferenceMeteringBodySchema),
     async (req, res, next) => {
       try {

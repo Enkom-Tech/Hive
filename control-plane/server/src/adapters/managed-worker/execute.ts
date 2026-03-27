@@ -15,7 +15,7 @@ import { logPlacementMetric } from "../../placement-metrics.js";
 
 /** Logical LLM model id for this run (OpenAI-style `model` field / model-gateway routing). */
 function resolveRunModelId(
-  agent: { adapterConfig: unknown },
+  agent: { adapterConfig: unknown; runtimeConfig?: unknown },
   context: Record<string, unknown>,
 ): string | undefined {
   const fromCtx =
@@ -31,7 +31,13 @@ function resolveRunModelId(
       : {};
   const fromAgent =
     typeof cfg.model === "string" ? cfg.model.trim() : typeof cfg.modelId === "string" ? cfg.modelId.trim() : "";
-  return fromAgent || undefined;
+  if (fromAgent) return fromAgent;
+  const rt =
+    agent.runtimeConfig && typeof agent.runtimeConfig === "object" && agent.runtimeConfig !== null
+      ? (agent.runtimeConfig as Record<string, unknown>)
+      : {};
+  const fromRt = typeof rt.defaultModelSlug === "string" ? rt.defaultModelSlug.trim() : "";
+  return fromRt || undefined;
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {

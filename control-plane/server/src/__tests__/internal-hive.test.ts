@@ -1,7 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { internalHiveRoutes } from "../routes/internal-hive.js";
+import { internalHiveOperatorRoutes } from "../routes/internal-hive.js";
 import { errorHandler } from "../middleware/error-handler.js";
 
 const mockDb = {} as import("@hive/db").Db;
@@ -27,7 +27,7 @@ describe("internal hive routes", () => {
   function app(secret: string) {
     const a = express();
     a.use(express.json());
-    a.use("/internal/hive", internalHiveRoutes(mockDb, { operatorSecret: secret }));
+    a.use("/internal/hive", internalHiveOperatorRoutes(mockDb, { operatorSecret: secret }));
     a.use(errorHandler);
     return a;
   }

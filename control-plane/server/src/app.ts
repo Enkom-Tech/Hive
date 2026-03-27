@@ -44,7 +44,10 @@ import { createCompanyEventsSSEHandler } from "./routes/events-sse.js";
 import { releaseRoutes } from "./routes/releases.js";
 import { workerDownloadsRoutes } from "./routes/worker-downloads.js";
 import { workerApiRoutes } from "./routes/worker-api.js";
-import { internalHiveRoutes } from "./routes/internal-hive.js";
+import {
+  internalHiveOperatorRoutes,
+  internalHiveTrainingCallbackRoutes,
+} from "./routes/internal-hive.js";
 import { pluginHostRoutes } from "./routes/plugin-host.js";
 import { pluginBoardRoutes } from "./routes/plugins.js";
 import { registerGithubWebhookBeforeJson } from "./routes/integrations-github.js";
@@ -107,7 +110,10 @@ export async function createApp(
     workerProvisionManifestJson?: string;
     workerProvisionManifestFile?: string;
     workerProvisionManifestSigningKeyPem?: string;
-    /** Enables POST /api/internal/hive/inference-metering (router → ledger). */
+    /**
+     * Enables operator-only internal routes (metering, gateway key lookup). Also used as optional
+     * break-glass Bearer for model-training-callback; the callback route is mounted regardless.
+     */
     internalHiveOperatorSecret?: string;
     pluginHostSecret?: string;
     /**
@@ -306,10 +312,16 @@ export async function createApp(
     workerApiMetricsMiddleware(),
     workerApiRoutes(db, { secretsStrictMode: opts.secretsStrictMode }),
   );
+  api.use(
+    "/internal/hive",
+    internalHiveTrainingCallbackRoutes(db, {
+      internalOperatorSecret: opts.internalHiveOperatorSecret?.trim(),
+    }),
+  );
   if (opts.internalHiveOperatorSecret?.trim()) {
     api.use(
       "/internal/hive",
-      internalHiveRoutes(db, { operatorSecret: opts.internalHiveOperatorSecret.trim() }),
+      internalHiveOperatorRoutes(db, { operatorSecret: opts.internalHiveOperatorSecret.trim() }),
     );
   }
   if (opts.pluginHostSecret?.trim()) {
@@ -351,6 +363,7 @@ export async function createApp(
         opts.bifrostAdminBaseUrl?.trim() && opts.bifrostAdminToken?.trim()
           ? { baseUrl: opts.bifrostAdminBaseUrl.trim(), token: opts.bifrostAdminToken.trim() }
           : undefined,
+      internalHiveOperatorSecret: opts.internalHiveOperatorSecret,
     }),
   );
   api.use(agentRoutes(db, { strictSecretsMode: opts.secretsStrictMode }));

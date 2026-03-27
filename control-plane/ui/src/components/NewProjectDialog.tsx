@@ -24,7 +24,7 @@ import {
   Plus,
   X,
   FolderOpen,
-  Github,
+  FolderGit,
   GitBranch,
 } from "lucide-react";
 import { PROJECT_COLORS } from "@hive/shared";
@@ -310,7 +310,7 @@ export function NewProjectDialog() {
               onClick={() => toggleWorkspaceSetup("repo")}
             >
               <div className="flex items-center gap-2 text-sm font-medium">
-                <Github className="h-4 w-4" />
+                <FolderGit className="h-4 w-4" />
                 A github repo
               </div>
               <p className="mt-1 text-xs text-muted-foreground">Paste a GitHub URL.</p>

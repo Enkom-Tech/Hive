@@ -14,7 +14,7 @@ This matrix complements `assertCompanyAccess` (company scope) and `boardMutation
 |----------|------------------------------------------------------------|
 | viewer   | `company:read`, `costs:read`                               |
 | operator | viewer keys + task/agent/issue mutations per `role-presets.ts` |
-| admin    | operator + `company:settings`, `joins:approve`, `secrets:manage`, `plugins:manage`, … |
+| admin    | operator + `company:settings`, `joins:approve`, `secrets:manage`, `plugins:manage`, `models:train`, … |
 
 Source: `packages/shared/src/rbac/role-presets.ts`.
 
@@ -42,6 +42,7 @@ Source: `packages/shared/src/rbac/role-presets.ts`.
 | Issues | Writes / assign | `issues:write`, `tasks:assign` (+ assign scope when grant uses `tasks:assign_scope`) |
 | Costs | Read / manage | `costs:read` / `costs:manage` |
 | Sidebar badges | `GET .../sidebar-badges` | `company:read`; response includes `canApproveJoinRequests` |
+| Model training | `GET/POST .../companies/:id/model-training-runs` (+ cancel, promote, dataset-export) | `models:train` (+ `company:read` for list/detail/export when using board session) |
 
 ## Worker API
 

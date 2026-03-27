@@ -358,6 +358,13 @@
       "when": 1775800000000,
       "tag": "0050_plugin_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1775900000000,
+      "tag": "0051_model_training_runs",
+      "breakpoints": true
     }
   ]
 }

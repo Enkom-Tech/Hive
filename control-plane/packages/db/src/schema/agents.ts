@@ -41,6 +41,8 @@ export const agents = pgTable(
     workerIdentitySlotId: uuid("worker_identity_slot_id").references(() => workerIdentityDesiredSlots.id, {
       onDelete: "set null",
     }),
+    /** Null inherits company `identity_self_tune_policy`. */
+    identitySelfTunePolicy: text("identity_self_tune_policy"),
     /** Last reason automatic placement failed for automatic-mode agents (observability). */
     lastAutomaticPlacementFailure: text("last_automatic_placement_failure"),
     lastAutomaticPlacementFailureAt: timestamp("last_automatic_placement_failure_at", {

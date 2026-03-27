@@ -35,6 +35,7 @@ const ADMIN_KEY_LIST: PermissionKey[] = [
   "secrets:manage",
   "costs:manage",
   "plugins:manage",
+  "models:train",
 ];
 
 const ADMIN_KEYS = new Set<PermissionKey>(ADMIN_KEY_LIST);

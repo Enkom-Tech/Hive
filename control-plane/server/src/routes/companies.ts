@@ -42,6 +42,7 @@ import { sendSignedProvisionManifestJson } from "../services/worker-manifest-sig
 import { canReadCompanyWorkerRuntimeManifest } from "../services/worker-runtime-manifest-access.js";
 import { buildDroneAutoDeployProfile } from "../services/drone-auto-deploy-profile.js";
 import { bifrostCreateVirtualKey, type BifrostProviderConfigInput } from "../services/bifrost-admin.js";
+import { registerModelTrainingRoutes } from "./model-training-routes.js";
 
 const mintDeployGrantSchema = z
   .object({
@@ -113,9 +114,14 @@ export function companyRoutes(
     /** Public API base URL for generated automation docs (e.g. https://board.example.com). */
     apiPublicBaseUrl?: string;
     bifrostAdmin?: { baseUrl: string; token: string };
+    internalHiveOperatorSecret?: string;
   },
 ) {
   const router = Router();
+  registerModelTrainingRoutes(router, db, {
+    internalOperatorSecret: routeOpts?.internalHiveOperatorSecret,
+    apiPublicBaseUrl: routeOpts?.apiPublicBaseUrl,
+  });
   const svc = companyService(db);
   const portability = companyPortabilityService(db);
   const access = accessService(db);

@@ -25,6 +25,14 @@ export const companies = pgTable(
     brandColor: text("brand_color"),
     /** Optional per-company JSON for hive-worker runtime/adapters manifest (HTTPS URLs, checksums). */
     workerRuntimeManifestJson: text("worker_runtime_manifest_json"),
+    /** Overrides deployment `model_training_runner_url` when set. */
+    modelTrainingRunnerUrl: text("model_training_runner_url"),
+    /** disabled | approval_required | auto_dispatch — future worker-initiated training; board APIs use RBAC. */
+    identitySelfTunePolicy: text("identity_self_tune_policy").notNull().default("disabled"),
+    /** When true, POST promote requires an approved `promote_model` approval for this run. */
+    requireApprovalForModelPromotion: boolean("require_approval_for_model_promotion")
+      .notNull()
+      .default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

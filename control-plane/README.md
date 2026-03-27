@@ -161,7 +161,7 @@ Hive handles the hard orchestration details correctly.
 | **Not a chatbot.**           | Agents have jobs, not chat windows.                                                                                  |
 | **Not an agent framework.**  | We don't tell you how to build agents. We tell you how to run a company made of them.                                |
 | **Not a workflow builder.**  | No drag-and-drop pipelines. Hive models companies — with org charts, goals, budgets, and governance.             |
-| **Not a prompt manager.**    | Agents bring their own prompts, models, and runtimes. Hive manages the organization they work in.                |
+| **Not only a prompt manager.** | Agents bring runtimes; Hive manages org structure, budgets, and can **orchestrate model training runs** that promote new inference routes per identity (see `doc/adr/008-model-training-runs.md`). |
 | **Not a single-agent tool.** | This is for teams. If you have one agent, you probably don't need Hive. If you have twenty — you definitely do.  |
 | **Not a code review tool.**  | Hive orchestrates work, not pull requests. Bring your own review process.                                        |
 
@@ -237,7 +237,8 @@ See [doc/DEVELOPING.md](doc/DEVELOPING.md) for the full development guide.
 - ⚪ ClipMart - buy and sell entire agent companies
 - ⚪ Easy agent configurations / easier to understand
 - ⚪ Harness engineering: fleet (`hive-worker` capacity) vs board identities, explicit assignment, placement lifecycle — see [doc/adr/005-fleet-identity-assignment.md](doc/adr/005-fleet-identity-assignment.md)
-- ⚪ Plugin system (e.g. if you want to add a knowledgebase, custom tracing, queues, etc)
+- ⚪ Plugin system (e.g. knowledgebase, custom tracing, queues)
+- ✅ Model training runs: external runners, callbacks, promotion into `inference_models` (`doc/adr/008-model-training-runs.md`)
 - ⚪ Better docs
 
 <br/>

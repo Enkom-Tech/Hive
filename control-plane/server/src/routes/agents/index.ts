@@ -13,6 +13,7 @@ import {
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
   updateAgentSchema,
+  AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY,
 } from "@hive/shared";
 import { validate } from "../../middleware/validate.js";
 import type { ApprovalServiceAdapterDeps } from "../../services/approvals.js";
@@ -648,6 +649,20 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
       return;
     }
     const patchData = { ...(req.body as Record<string, unknown>) };
+    const defaultModelSlugRaw = patchData.defaultModelSlug;
+    if (Object.prototype.hasOwnProperty.call(patchData, "defaultModelSlug")) {
+      delete patchData.defaultModelSlug;
+      const baseRc = {
+        ...((asRecord(existing.runtimeConfig) ?? {}) as Record<string, unknown>),
+        ...((asRecord(patchData.runtimeConfig) ?? {}) as Record<string, unknown>),
+      };
+      if (defaultModelSlugRaw === null) {
+        delete baseRc[AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY];
+      } else if (typeof defaultModelSlugRaw === "string" && defaultModelSlugRaw.trim()) {
+        baseRc[AGENT_RUNTIME_DEFAULT_MODEL_SLUG_KEY] = defaultModelSlugRaw.trim();
+      }
+      patchData.runtimeConfig = baseRc;
+    }
     if (Object.prototype.hasOwnProperty.call(patchData, "adapterConfig")) {
       const adapterConfig = asRecord(patchData.adapterConfig);
       if (!adapterConfig) {

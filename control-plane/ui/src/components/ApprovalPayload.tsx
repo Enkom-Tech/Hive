@@ -1,13 +1,17 @@
-import { UserPlus, Lightbulb, ShieldCheck } from "lucide-react";
+import { UserPlus, Lightbulb, ShieldCheck, Sparkles } from "lucide-react";
 
 export const typeLabel: Record<string, string> = {
   hire_agent: "Hire Agent",
   approve_ceo_strategy: "CEO Strategy",
+  quality_review: "Quality Review",
+  promote_model: "Promote model",
 };
 
 export const typeIcon: Record<string, typeof UserPlus> = {
   hire_agent: UserPlus,
   approve_ceo_strategy: Lightbulb,
+  quality_review: ShieldCheck,
+  promote_model: Sparkles,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -56,7 +60,7 @@ export function CeoStrategyPayload({ payload }: { payload: Record<string, unknow
     <div className="mt-3 space-y-1.5 text-sm">
       <PayloadField label="Title" value={payload.title} />
       {!!plan && (
-        <div className="mt-2 rounded-md bg-muted/40 px-3 py-2 text-sm text-muted-foreground whitespace-pre-wrap font-mono text-xs max-h-48 overflow-y-auto">
+        <div className="mt-2 max-h-48 overflow-y-auto rounded-md bg-muted/40 px-3 py-2 font-mono text-xs whitespace-pre-wrap text-muted-foreground">
           {String(plan)}
         </div>
       )}
@@ -71,5 +75,13 @@ export function CeoStrategyPayload({ payload }: { payload: Record<string, unknow
 
 export function ApprovalPayloadRenderer({ type, payload }: { type: string; payload: Record<string, unknown> }) {
   if (type === "hire_agent") return <HireAgentPayload payload={payload} />;
+  if (type === "promote_model") {
+    return (
+      <div className="mt-3 space-y-1.5 text-sm">
+        <PayloadField label="Training run" value={payload.modelTrainingRunId} />
+        <PayloadField label="Model slug" value={payload.proposedModelSlug} />
+      </div>
+    );
+  }
   return <CeoStrategyPayload payload={payload} />;
 }
