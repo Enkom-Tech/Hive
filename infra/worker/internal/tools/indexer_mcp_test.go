@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMessageEndpoint(t *testing.T) {
@@ -58,6 +59,24 @@ func TestIndexerGatewayConfig_CallIndexerTool(t *testing.T) {
 	}
 	if text != `{"ok":true}` {
 		t.Fatalf("text %q", text)
+	}
+}
+
+func TestIndexerHTTPClientFromEnv_respectsShortTimeout(t *testing.T) {
+	t.Setenv("HIVE_MCP_INDEXER_HTTP_TIMEOUT_MS", "50")
+	client := IndexerHTTPClientFromEnv()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Do(req)
+	if err == nil {
+		t.Fatal("expected client timeout (server sleeps longer than HIVE_MCP_INDEXER_HTTP_TIMEOUT_MS)")
 	}
 }
 

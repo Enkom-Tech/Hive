@@ -103,7 +103,7 @@ When `HIVE_DEPLOYMENT_MODE=authenticated`, one of `BETTER_AUTH_SECRET` or `HIVE_
 | `HIVE_WORKER_PROVISION_MANIFEST_FILE` | — | Optional JSON file path for worker provisioning manifest when inline JSON is unset |
 | `HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY_FILE` | — | Optional PEM path for Ed25519 private key; when set, manifest GET responses include `X-Hive-Manifest-Signature` |
 | `HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY` | — | Optional inline PEM or base64 PEM for Ed25519 manifest signing (prefer `_SIGNING_KEY_FILE` in production) |
-| `HIVE_WORKER_JWT_SECRET` | — | HS256 secret for **worker-instance** JWT (`worker_api_token` WebSocket message, `POST /api/worker-api/*`). Omit to disable worker JWT minting and verification |
+| `HIVE_WORKER_JWT_SECRET` | — | HS256 secret for **worker-instance** JWT (`worker_api_token` WebSocket message, `POST /api/worker-api/*`). Omit to disable worker JWT minting and verification. Cryptographic policy note: [ADR 007](../../doc/adr/007-worker-instance-jwt-hs256.md) |
 | `HIVE_WORKER_JWT_TTL_SECONDS` | `86400` | Worker JWT lifetime |
 | `HIVE_WORKER_JWT_ISSUER` | `hive` | Optional issuer claim |
 | `HIVE_WORKER_JWT_AUDIENCE` | `hive-worker-api` | Optional audience claim |

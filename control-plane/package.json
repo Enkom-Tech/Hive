@@ -10,9 +10,9 @@
     "dev:ui": "pnpm --filter @hive/ui dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "npx vitest",
-    "test:run": "npx vitest run",
-    "test:coverage": "npx vitest run --coverage",
+    "test": "pnpm exec vitest",
+    "test:run": "pnpm exec vitest run",
+    "test:coverage": "pnpm exec vitest run --coverage",
     "db:generate": "pnpm --filter @hive/db generate",
     "db:migrate": "pnpm --filter @hive/db migrate",
     "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",
@@ -31,10 +31,10 @@
     "check:legacy-drone-api": "node scripts/check-legacy-drone-api.mjs",
     "doc:export-avatar-pngs": "node scripts/export-avatar-pngs.mjs",
     "docs:dev": "cd docs && npx mintlify dev",
-    "test:e2e": "npx playwright test --config tests/e2e/playwright.config.ts",
-    "test:e2e:headed": "npx playwright test --config tests/e2e/playwright.config.ts --headed",
-    "test:e2e:onboarding": "npx playwright test tests/e2e/onboarding.spec.ts --config tests/e2e/playwright.config.ts",
-    "test:e2e:smoke-mcp": "npx playwright test tests/e2e/z-mcp-worker-api-smoke.spec.ts --config tests/e2e/playwright.config.ts"
+    "test:e2e": "pnpm exec playwright test --config tests/e2e/playwright.config.ts",
+    "test:e2e:headed": "pnpm exec playwright test --config tests/e2e/playwright.config.ts --headed",
+    "test:e2e:onboarding": "pnpm exec playwright test tests/e2e/onboarding.spec.ts --config tests/e2e/playwright.config.ts",
+    "test:e2e:smoke-mcp": "pnpm exec playwright test tests/e2e/z-mcp-worker-api-smoke.spec.ts --config tests/e2e/playwright.config.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",

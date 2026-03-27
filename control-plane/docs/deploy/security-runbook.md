@@ -56,6 +56,8 @@ Extended threat notes for MCP, gateways, and RAG: [`doc/plans/threat-model-manag
 
 Used to mint **`worker_api_token`** on the worker WebSocket and to verify **`Authorization: Bearer`** on **`POST/GET /api/worker-api/*`** only.
 
+**Algorithm:** Tokens are **HS256** (symmetric). If organizational policy expects post-quantum or asymmetric-only signing for all credentials, record acceptance against [ADR 007 — worker-instance JWT HS256](../../doc/adr/007-worker-instance-jwt-hs256.md) and plan a v2 token format when mandated.
+
 - **Generation:** Use a cryptographically random secret (e.g. 32+ bytes) from a password manager, `openssl rand`, or the platform secret store. Do not reuse board or agent JWT secrets.
 - **Storage:** Kubernetes **Secret** (or vault); mount into the API deployment. Workers do **not** need the secret — they receive the short-lived JWT from the control plane.
 - **TTL:** `HIVE_WORKER_JWT_TTL_SECONDS` (default 86400). Shorter TTL reduces blast radius if `worker-jwt` is copied off-disk; very short TTLs increase reconnect churn if the control plane does not refresh tokens as often as agents run.
