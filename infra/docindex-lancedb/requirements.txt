@@ -4,7 +4,7 @@
 # Dependabot updates this file; Docker installs from requirements-api.lock (hash-verified).
 # Back-compat alias: requirements-api.txt is `-r requirements.txt`.
 
-fastapi>=0.115.0,<0.121.0
+fastapi>=0.115.0,<0.136.0
 # Plain uvicorn only: uvicorn[standard] pulls uvloop without == pins, which breaks hash-locked installs in Docker.
 # On Linux, `uvicorn[standard]` / uvloop remains optional for non-hash local installs or a future constraints split.
 uvicorn>=0.30.0,<0.36.0
