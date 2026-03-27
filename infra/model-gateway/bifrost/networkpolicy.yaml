@@ -1,0 +1,71 @@
+# Example NetworkPolicy for Bifrost when used as Hive's model gateway.
+# Adjust namespace, pod labels, and egress rules to match your cluster.
+# For explicit egress to the Hive board (metering + internal lookup), apply
+# networkpolicy-board-egress.example.yaml in addition to this file.
+#
+# Apply: kubectl apply -n hive-llm -f infra/model-gateway/bifrost/networkpolicy.yaml
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bifrost-gateway
+  labels:
+    app.kubernetes.io/name: bifrost
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bifrost
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only worker pods in hive-workers may call the gateway HTTP port.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: hive-workers
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: hive-worker
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Optional: allow Prometheus scrapes from monitoring namespace
+    # - from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: monitoring
+    #   ports:
+    #     - protocol: TCP
+    #       port: 8080
+  egress:
+    # CoreDNS (typical: kube-system, k8s-app=kube-dns)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # LLM backends (tighten to exact Services / IPs in production)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: hive-llm
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 443
+    # Hive board (metering, internal VK lookup): see networkpolicy-board-egress.example.yaml

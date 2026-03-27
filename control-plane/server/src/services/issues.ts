@@ -762,6 +762,33 @@ export function issueService(db: Db) {
       return db.transaction(async (tx) => createInTxImpl(tx, companyId, data));
     },
 
+    /** Assignee / status checks for issue create (e.g. worker-api + intent in same transaction). */
+    validateIssueCreateAssignees: async (
+      companyId: string,
+      data: {
+        assigneeAgentId?: string | null;
+        assigneeUserId?: string | null;
+        status?: string;
+      },
+    ) => {
+      if (data.assigneeAgentId && data.assigneeUserId) {
+        throw unprocessable("Issue can only have one assignee");
+      }
+      if (data.assigneeAgentId) {
+        await assertAssignableAgent(companyId, data.assigneeAgentId);
+      }
+      if (data.assigneeUserId) {
+        await assertAssignableUser(companyId, data.assigneeUserId);
+      }
+      if (
+        data.status === ISSUE_STATUS_IN_PROGRESS &&
+        !data.assigneeAgentId &&
+        !data.assigneeUserId
+      ) {
+        throw unprocessable("in_progress issues require an assignee");
+      }
+    },
+
     /** Creates an issue inside the given transaction. Used when wrapping issue create with intent folding. */
     createInTx: async (
       tx: DbTransaction,

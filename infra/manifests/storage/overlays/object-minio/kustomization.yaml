@@ -1,0 +1,10 @@
+# Self-contained variant: MinIO instead of RustFS (Kustomize load restrictions — keep in sync with base).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hive-storage
+resources:
+  - namespace.yaml
+  - dragonfly.yaml
+  - juicefs-storageclass.yaml
+  - minio.yaml
+  - poddisruptionbudgets.yaml

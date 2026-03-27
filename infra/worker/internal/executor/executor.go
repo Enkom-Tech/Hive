@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +20,17 @@ type Payload struct {
 	AgentID string
 	RunID   string
 	Context []byte
+	// ModelID is the logical LLM model id (OpenAI-style) for HIVE_MODEL_ID / model-gateway routing.
+	ModelID string
+}
+
+// AppendModelEnv sets HIVE_MODEL_ID and HIVE_MODEL when modelID is non-empty.
+func AppendModelEnv(env []string, modelID string) []string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return env
+	}
+	return append(env, "HIVE_MODEL_ID="+modelID, "HIVE_MODEL="+modelID)
 }
 
 // Executor runs one task (e.g. invoke a CLI with context). Implementations are allowlisted and configured by the operator.
@@ -97,14 +109,16 @@ func (e *ProcessExecutor) Run(ctx context.Context, payload *Payload, workspaceDi
 	if err != nil {
 		absDir = workspaceDir
 	}
+	_ = WriteHiveMcpJSON(absDir)
 	// Pass context to the tool via env so it can be used by the subprocess.
-	env := append(os.Environ(),
+	env := AppendModelEnv(append(os.Environ(),
 		"HIVE_AGENT_ID="+payload.AgentID,
 		"HIVE_RUN_ID="+payload.RunID,
-	)
+	), payload.ModelID)
 	if len(payload.Context) > 0 {
 		env = append(env, "HIVE_CONTEXT_JSON="+base64.StdEncoding.EncodeToString(payload.Context))
 	}
+	env = AppendHiveMcpEnv(env)
 	runner := e.runner()
 	return runner.Run(ctx, cmd, nil, absDir, env)
 }
@@ -126,13 +140,15 @@ func (e *ProcessExecutor) RunStream(ctx context.Context, payload *Payload, works
 	if err != nil {
 		absDir = workspaceDir
 	}
-	env := append(os.Environ(),
+	_ = WriteHiveMcpJSON(absDir)
+	env := AppendModelEnv(append(os.Environ(),
 		"HIVE_AGENT_ID="+payload.AgentID,
 		"HIVE_RUN_ID="+payload.RunID,
-	)
+	), payload.ModelID)
 	if len(payload.Context) > 0 {
 		env = append(env, "HIVE_CONTEXT_JSON="+base64.StdEncoding.EncodeToString(payload.Context))
 	}
+	env = AppendHiveMcpEnv(env)
 	if onChunk == nil {
 		return e.Run(ctx, payload, workspaceDir)
 	}

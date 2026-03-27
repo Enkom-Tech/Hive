@@ -33,7 +33,8 @@ The server uses an allowlist for `Access-Control-Allow-Origin`. Only origins lis
   - `PUT` / `DELETE` `/api/companies/:companyId/worker-instances/.../agents/...` (bind/unbind)
   - `POST /api/companies/:companyId/agents/:agentId/worker-pool/rotate` (automatic pool advance)
   - `PATCH /api/companies/:companyId/worker-instances/:workerInstanceId` (drone metadata / drain flag)
-  - `POST /api/worker-tools/bridge` (agent tool bridge; allowlisted actions only)
+  - `POST /api/worker-api/*` (worker-instance JWT only; rate-limited with other sensitive routes)
+  - `POST /api/worker-api/issues` may send `X-Hive-Worker-Idempotency-Key`; the control plane stores the first successful **201** JSON per `(company, agent, route, key)` for safe retries (no duplicate side effects on replay).
   - `GET /api/worker-downloads/provision-manifest` and `GET /api/companies/:companyId/worker-runtime/manifest` (provisioning manifest leak / scrape surface)
   - `POST /api/invites/:token/accept`
 
@@ -48,6 +49,30 @@ Sensitive operations (key create, worker enrollment token mint, invite create/re
 Prefer **short-lived enrollment tokens** (`POST /api/agents/{id}/link-enrollment-tokens`) for onboarding operators to the worker WebSocket: single-use on successful connect, bounded TTL, plaintext shown once. Long-lived **agent API keys** remain for automation and CI; treat them as secrets (env files, secret stores), not copy-paste defaults in guided UI flows.
 
 `GET /api/companies/{companyId}/drones/overview` returns only **metadata** (board agents / managed_worker identities, optional drone grouping, connection hints, hello fields, counts of unconsumed enrollment rows). It never returns enrollment plaintext or API keys.
+
+Extended threat notes for MCP, gateways, and RAG: [`doc/plans/threat-model-managed-worker-pool.md`](../../doc/plans/threat-model-managed-worker-pool.md) (*MCP, worker-api, RAG, and indexer gateways*).
+
+## Worker-instance JWT (`HIVE_WORKER_JWT_SECRET`)
+
+Used to mint **`worker_api_token`** on the worker WebSocket and to verify **`Authorization: Bearer`** on **`POST/GET /api/worker-api/*`** only.
+
+- **Generation:** Use a cryptographically random secret (e.g. 32+ bytes) from a password manager, `openssl rand`, or the platform secret store. Do not reuse board or agent JWT secrets.
+- **Storage:** Kubernetes **Secret** (or vault); mount into the API deployment. Workers do **not** need the secret — they receive the short-lived JWT from the control plane.
+- **TTL:** `HIVE_WORKER_JWT_TTL_SECONDS` (default 86400). Shorter TTL reduces blast radius if `worker-jwt` is copied off-disk; very short TTLs increase reconnect churn if the control plane does not refresh tokens as often as agents run.
+- **Rotation (single secret, no overlap):** (1) Generate new secret. (2) Update API **`HIVE_WORKER_JWT_SECRET`** and roll API pods. (3) Roll worker pods (or wait for natural reconnect) so each drone obtains a new token minted with the new secret. Until both sides match, worker-api calls fail with **401/403** — plan a maintenance window.
+- **Issuer / audience:** When using distinct environments behind the same hostname patterns, set **`HIVE_WORKER_JWT_ISSUER`** and **`HIVE_WORKER_JWT_AUDIENCE`** so tokens are not interchangeable across envs.
+
+## HiveIndexer / HiveDocIndexer gateway tokens
+
+Worker pods receive **`HIVE_MCP_CODE_TOKEN`** / **`HIVE_MCP_DOCS_TOKEN`** via **`secretKeyRef`** (key **`token`**) when the operator sets gateway env from **`HiveIndexer`** / **`HiveDocIndexer`** status.
+
+- **Symptom:** `kubectl describe hiveworkerpool` shows **`MCPCodeGateway`** or **`MCPDocsGateway`** **False** with **`GatewayIncomplete`** or **`IndexerNotFound`** — fix CRs or names (`codeIndexerName` / `docIndexerName`).
+- **Rotation:** Create a new Secret with a new token, update the indexer CR/status wiring so the gateway uses it, then roll the gateway and worker pool so env picks up the new ref. Tenant samples: [`infra/cluster/tenants/example/`](../../../infra/cluster/tenants/example/); operator reconciles **`HiveIndexer`** / **`HiveDocIndexer`** into worker pool env.
+
+## Alerts: worker MCP and indexers
+
+- **Worker-api auth spike:** Monitor **401/403** rate on **`/api/worker-api/*`** (logs or ingress metrics). Often indicates JWT rotation mismatch, clock skew, or abuse. When **`HIVE_METRICS_ENABLED=true`**, scrape **`GET /api/metrics`** (network-restricted; not app-authenticated by default) for **`hive_worker_api_requests_total`** with labels **`method`**, **`route`** (`cost_report`, `issue_create`, `issue_update`, `agent_hire`, `issue_comment`, `issue_transition`, `issue_get`, `other`), and **`status_class`** (`2xx`, `4xx`, `401`, `403`, `429`, `5xx`, `other`). Optional histogram: **`hive_worker_api_request_duration_seconds`**.
+- **Indexer path:** On each worker, scrape **`GET /metrics`** (if reachable) for **`hive_mcp_indexer_calls_total{result="error"}`** vs **`ok`** and **`hive_mcp_indexer_circuit_open`** = 1 — indicates gateway down, bad token, or indexer overload. Correlate with **`MCPCodeGateway` / `MCPDocsGateway`** conditions on **`HiveWorkerPool`** and **`IndexerDegraded`** on **`HiveIndexer` / `HiveDocIndexer`** when present.
 
 ## Managed worker pool — go-live checklist (instance mint / multi-agent hosts)
 

@@ -384,3 +384,112 @@ func (in *HiveIndexerList) DeepCopy() *HiveIndexerList {
 	in.DeepCopyInto(out)
 	return out
 }
+
+// DeepCopyInto for HiveDocIndexer.
+func (in *HiveDocIndexer) DeepCopyInto(out *HiveDocIndexer) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+// DeepCopy for HiveDocIndexer.
+func (in *HiveDocIndexer) DeepCopy() *HiveDocIndexer {
+	if in == nil {
+		return nil
+	}
+	out := new(HiveDocIndexer)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyObject implements runtime.Object for HiveDocIndexer.
+func (in *HiveDocIndexer) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+// DeepCopyInto for HiveDocIndexerSpec.
+func (in *HiveDocIndexerSpec) DeepCopyInto(out *HiveDocIndexerSpec) {
+	*out = *in
+	if in.NodeSelector != nil {
+		in, out := &in.NodeSelector, &out.NodeSelector
+		*out = make(map[string]string, len(*in))
+		for k, v := range *in {
+			(*out)[k] = v
+		}
+	}
+	out.Resources = corev1.ResourceRequirements{}
+	if in.Resources.Limits != nil {
+		out.Resources.Limits = make(corev1.ResourceList, len(in.Resources.Limits))
+		for k, v := range in.Resources.Limits {
+			out.Resources.Limits[k] = v.DeepCopy()
+		}
+	}
+	if in.Resources.Requests != nil {
+		out.Resources.Requests = make(corev1.ResourceList, len(in.Resources.Requests))
+		for k, v := range in.Resources.Requests {
+			out.Resources.Requests[k] = v.DeepCopy()
+		}
+	}
+	out.WorkerResources = corev1.ResourceRequirements{}
+	if in.WorkerResources.Limits != nil {
+		out.WorkerResources.Limits = make(corev1.ResourceList, len(in.WorkerResources.Limits))
+		for k, v := range in.WorkerResources.Limits {
+			out.WorkerResources.Limits[k] = v.DeepCopy()
+		}
+	}
+	if in.WorkerResources.Requests != nil {
+		out.WorkerResources.Requests = make(corev1.ResourceList, len(in.WorkerResources.Requests))
+		for k, v := range in.WorkerResources.Requests {
+			out.WorkerResources.Requests[k] = v.DeepCopy()
+		}
+	}
+}
+
+// DeepCopyInto for HiveDocIndexerStatus.
+func (in *HiveDocIndexerStatus) DeepCopyInto(out *HiveDocIndexerStatus) {
+	*out = *in
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]metav1.Condition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+// DeepCopyInto for HiveDocIndexerList.
+func (in *HiveDocIndexerList) DeepCopyInto(out *HiveDocIndexerList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]HiveDocIndexer, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+// DeepCopyObject implements runtime.Object for HiveDocIndexerList.
+func (in *HiveDocIndexerList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+// DeepCopy for HiveDocIndexerList.
+func (in *HiveDocIndexerList) DeepCopy() *HiveDocIndexerList {
+	if in == nil {
+		return nil
+	}
+	out := new(HiveDocIndexerList)
+	in.DeepCopyInto(out)
+	return out
+}

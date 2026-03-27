@@ -24,4 +24,5 @@ func Metrics(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(fmt.Sprintf("%d\n", tasksActive.Load())))
 	_, _ = w.Write([]byte("# HELP hive_errors_total Total errors\n# TYPE hive_errors_total counter\nhive_errors_total "))
 	_, _ = w.Write([]byte(fmt.Sprintf("%d\n", errorsTotal.Load())))
+	WriteWorkerMCPMetrics(w)
 }

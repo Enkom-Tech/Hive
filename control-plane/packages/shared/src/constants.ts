@@ -1,3 +1,6 @@
+/** Default `hive_deployments` row for single-deployment installs and backfill. */
+export const DEFAULT_HIVE_DEPLOYMENT_ID = "a0000000-0000-4000-8000-000000000001";
+
 export const COMPANY_STATUSES = ["active", "paused", "archived"] as const;
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
 

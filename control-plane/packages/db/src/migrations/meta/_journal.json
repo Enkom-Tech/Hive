@@ -295,6 +295,41 @@
       "when": 1774900000000,
       "tag": "0041_worker_identity_automation",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1775000000000,
+      "tag": "0042_hive_deployments_inference_cost",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1775100000000,
+      "tag": "0043_gateway_virtual_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1775200000000,
+      "tag": "0044_bifrost_gateway_backend",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1775300000000,
+      "tag": "0045_greenfield_default_bifrost_backend",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1775400000000,
+      "tag": "0046_worker_api_idempotency",
+      "breakpoints": true
     }
   ]
 }

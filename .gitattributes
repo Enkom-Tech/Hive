@@ -1,0 +1,2 @@
+# Bash used on Linux CI and Git Bash; CRLF breaks set -o pipefail / heredocs.
+infra/scripts/*.sh text eol=lf

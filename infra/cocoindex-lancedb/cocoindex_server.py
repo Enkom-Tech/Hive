@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 import re
 import threading
 from contextlib import asynccontextmanager
@@ -20,8 +21,12 @@ import lancedb
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -36,10 +41,14 @@ structlog.configure(
 )
 logger = structlog.get_logger()
 
+# IvfPq trains product quantization on a sample; below this row count use IvfFlat.
+_LANCE_PQ_MIN_ROWS = 256
+
 # -----------------------------------------------------------------------------
 # Safe filter helpers — prevent LanceDB filter injection
 # -----------------------------------------------------------------------------
 _SAFE_ID_RE = re.compile(r'^[a-zA-Z0-9_\-\.]+$')
+_SAFE_STR_FILTER_MAX_LEN = 1000
 
 def _safe_str_filter(column: str, value: str) -> str:
     """
@@ -47,6 +56,8 @@ def _safe_str_filter(column: str, value: str) -> str:
     Raises ValueError if value contains SQL metacharacters, preventing injection.
     Only alphanumeric characters plus _ - . are permitted.
     """
+    if len(value) > _SAFE_STR_FILTER_MAX_LEN:
+        raise ValueError(f"Invalid filter value for '{column}': exceeds maximum length")
     if not _SAFE_ID_RE.match(value):
         raise ValueError(f"Invalid filter value for '{column}': {value!r}")
     return f"{column} = '{value}'"
@@ -54,21 +65,81 @@ def _safe_str_filter(column: str, value: str) -> str:
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-class Settings(BaseModel):
-    repos_path: str = Field(default="/data/repos", alias="COCOINDEX_REPOS_PATH")
-    lancedb_uri: str = Field(default="/data/lancedb", alias="COCOINDEX_LANCEDB_URI")
-    embedding_url: str = Field(default="http://llama-embeddings:8080", alias="COCOINDEX_EMBEDDING_URL")
-    embedding_dim: int = Field(default=4096, alias="COCOINDEX_EMBEDDING_DIM")
-    embedding_batch_size: int = Field(default=32, alias="COCOINDEX_EMBEDDING_BATCH_SIZE")
-    api_host: str = Field(default="0.0.0.0", alias="COCOINDEX_API_HOST")
-    api_port: int = Field(default=8080, alias="COCOINDEX_API_PORT")
-    index_on_startup: bool = Field(default=True, alias="COCOINDEX_INDEX_ON_STARTUP")
-    watch_repos: bool = Field(default=True, alias="COCOINDEX_WATCH_REPOS")
-    log_level: str = Field(default="info", alias="COCOINDEX_LOG_LEVEL")
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        populate_by_name=True,
+        extra="ignore",
+    )
 
-    class Config:
-        env_prefix = ""
-        populate_by_name = True
+    repos_path: str = Field(
+        default="/data/repos",
+        validation_alias=AliasChoices("COCOINDEX_REPOS_PATH", "repos_path"),
+    )
+    lancedb_uri: str = Field(
+        default="/data/lancedb",
+        validation_alias=AliasChoices("COCOINDEX_LANCEDB_URI", "lancedb_uri"),
+    )
+    embedding_url: str = Field(
+        default="http://llama-embeddings:8080",
+        validation_alias=AliasChoices("COCOINDEX_EMBEDDING_URL", "embedding_url"),
+    )
+    embedding_dim: int = Field(
+        default=4096,
+        validation_alias=AliasChoices("COCOINDEX_EMBEDDING_DIM", "embedding_dim"),
+    )
+    embedding_batch_size: int = Field(
+        default=32,
+        validation_alias=AliasChoices("COCOINDEX_EMBEDDING_BATCH_SIZE", "embedding_batch_size"),
+    )
+    embedding_max_concurrent_batches: int = Field(
+        default=1,
+        ge=1,
+        le=64,
+        validation_alias=AliasChoices(
+            "COCOINDEX_EMBEDDING_MAX_CONCURRENT_BATCHES",
+            "embedding_max_concurrent_batches",
+        ),
+    )
+    max_concurrent_file_tasks: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        validation_alias=AliasChoices(
+            "COCOINDEX_MAX_CONCURRENT_FILE_TASKS",
+            "max_concurrent_file_tasks",
+        ),
+    )
+    rate_limit_index: str = Field(
+        default="10/minute",
+        validation_alias=AliasChoices("COCOINDEX_RATE_LIMIT_INDEX", "rate_limit_index"),
+    )
+    rate_limit_search: str = Field(
+        default="60/minute",
+        validation_alias=AliasChoices("COCOINDEX_RATE_LIMIT_SEARCH", "rate_limit_search"),
+    )
+    api_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("COCOINDEX_API_HOST", "api_host"),
+    )
+    api_port: int = Field(
+        default=8080,
+        validation_alias=AliasChoices("COCOINDEX_API_PORT", "api_port"),
+    )
+    index_on_startup: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("COCOINDEX_INDEX_ON_STARTUP", "index_on_startup"),
+    )
+    watch_repos: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("COCOINDEX_WATCH_REPOS", "watch_repos"),
+    )
+    log_level: str = Field(
+        default="info",
+        validation_alias=AliasChoices("COCOINDEX_LOG_LEVEL", "log_level"),
+    )
+
 
 settings = Settings()
 
@@ -170,29 +241,88 @@ class CodeChunker:
         
         return chunks
 
+
+def _coco_read_and_chunk_file(
+    repo_path: Path,
+    file_path: Path,
+    repo_name: str,
+    chunker: CodeChunker,
+) -> tuple:
+    """Sync: read text, hash, chunk. Runs in a worker thread."""
+    relative_path = str(file_path.relative_to(repo_path))
+    content = file_path.read_text(encoding="utf-8", errors="ignore")
+    file_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+    chunks = chunker.chunk_file(relative_path, content, repo_name)
+    return relative_path, file_hash, chunks
+
+
+def _coco_watcher_read_chunk(
+    path: Path,
+    relative_file_path: str,
+    repo_name: str,
+    chunker: CodeChunker,
+) -> List[CodeChunk]:
+    content = path.read_text(encoding="utf-8", errors="ignore")
+    return chunker.chunk_file(relative_file_path, content, repo_name)
+
+
 # -----------------------------------------------------------------------------
 # Embedding client
 # -----------------------------------------------------------------------------
 class EmbeddingClient:
-    def __init__(self, base_url: str):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        openai_compatible: bool = False,
+        openai_model: str = "",
+        max_concurrent_batches: int = 1,
+    ):
         self.base_url = base_url.rstrip('/')
+        self.openai_compatible = openai_compatible
+        self.openai_model = (openai_model or "").strip()
         self.client = httpx.AsyncClient(timeout=300.0)
-    
+        self._embed_sem = asyncio.Semaphore(max(1, max_concurrent_batches))
+
     async def embed(self, texts: List[str]) -> List[List[float]]:
-        """Get embeddings from llama.cpp server."""
+        """Get embeddings from llama.cpp server (/embedding) or OpenAI-compatible /v1/embeddings."""
         if not texts:
             return []
-        
-        # llama.cpp server embedding endpoint
+
+        async with self._embed_sem:
+            return await self._embed_unlocked(texts)
+
+    async def _embed_unlocked(self, texts: List[str]) -> List[List[float]]:
+        if self.openai_compatible:
+            if not self.openai_model:
+                raise ValueError(
+                    "COCOINDEX_EMBEDDING_MODEL_ID is required when COCOINDEX_EMBEDDING_OPENAI_COMPATIBLE is enabled"
+                )
+            response = await self.client.post(
+                f"{self.base_url}/v1/embeddings",
+                json={"model": self.openai_model, "input": texts},
+            )
+            response.raise_for_status()
+            data = response.json()
+            items = sorted(data.get("data", []), key=lambda x: int(x.get("index", 0)))
+            normalized: List[List[float]] = []
+            for emb in items:
+                vec = emb.get("embedding", [])
+                norm = sum(x * x for x in vec) ** 0.5
+                if norm > 0:
+                    vec = [x / norm for x in vec]
+                normalized.append(vec)
+            return normalized
+
         response = await self.client.post(
             f"{self.base_url}/embedding",
             json={"input": texts}
         )
         response.raise_for_status()
-        
+
         data = response.json()
         embeddings = data.get("data", [])
-        
+
         # Normalize embeddings (L2 norm) - compatible with BGE-M3 style
         normalized = []
         for emb in embeddings:
@@ -201,15 +331,23 @@ class EmbeddingClient:
             if norm > 0:
                 vec = [x / norm for x in vec]
             normalized.append(vec)
-        
+
         return normalized
-    
+
     async def close(self):
         await self.client.aclose()
 
 # -----------------------------------------------------------------------------
 # LanceDB manager
 # -----------------------------------------------------------------------------
+def _ivf_pq_subvectors(embedding_dim: int) -> int:
+    """Product quantization subvector count must divide embedding_dim."""
+    for candidate in (8, 4, 2, 1):
+        if embedding_dim >= candidate and embedding_dim % candidate == 0:
+            return candidate
+    return 1
+
+
 class LanceDBManager:
     TABLE_NAME = "code_embeddings"
     
@@ -217,10 +355,110 @@ class LanceDBManager:
         self.uri = uri
         self.db: Optional[lancedb.AsyncConnection] = None
         self.table: Optional[lancedb.AsyncTable] = None
+        self._vector_index_ready: bool = False
     
     async def connect(self):
         self.db = await lancedb.connect_async(self.uri)
         await self._ensure_table()
+    
+    async def _refresh_vector_index_state(self) -> None:
+        """Set _vector_index_ready from table metadata (no guessing)."""
+        if self.table is None:
+            self._vector_index_ready = False
+            return
+        try:
+            indices = await self.table.list_indices()
+        except Exception as e:
+            logger.warning("vector_index_list_failed", table=self.TABLE_NAME, error=str(e))
+            self._vector_index_ready = False
+            return
+        self._vector_index_ready = any(
+            "vector" in (getattr(ic, "columns", None) or []) for ic in indices
+        )
+
+    def _ivf_partition_count(self, row_count: int) -> int:
+        """KMeans clusters must be <= row_count; scale with sqrt(rows) at larger scale."""
+        if row_count < 1:
+            return 1
+        return min(256, max(1, min(16, row_count), int(row_count**0.5)))
+
+    def _vector_index_config(self, row_count: int):
+        from lancedb.index import IvfFlat, IvfPq
+
+        k = self._ivf_partition_count(row_count)
+        if row_count < _LANCE_PQ_MIN_ROWS:
+            return IvfFlat(distance_type="cosine", num_partitions=k)
+        sub = _ivf_pq_subvectors(settings.embedding_dim)
+        return IvfPq(
+            distance_type="cosine",
+            num_partitions=k,
+            num_sub_vectors=sub,
+        )
+
+    async def _upgrade_ivf_flat_to_pq_if_needed(self, row_count: int) -> None:
+        """Replace IvfFlat with IvfPq once PQ training has enough rows (storage + recall)."""
+        if row_count < _LANCE_PQ_MIN_ROWS or self.table is None:
+            return
+        try:
+            indices = await self.table.list_indices()
+        except Exception:
+            return
+        has_flat = any(
+            "vector" in (getattr(ic, "columns", None) or [])
+            and getattr(ic, "index_type", "") == "IvfFlat"
+            for ic in indices
+        )
+        if not has_flat:
+            return
+        from lancedb.index import IvfPq
+
+        cfg = self._vector_index_config(row_count)
+        if not isinstance(cfg, IvfPq):
+            return
+        try:
+            await self.table.create_index("vector", config=cfg, replace=True)
+            logger.info(
+                "vector_index_upgraded_ivf_pq",
+                table=self.TABLE_NAME,
+                rows=row_count,
+            )
+        except RuntimeError as e:
+            logger.warning(
+                "vector_index_upgrade_failed",
+                table=self.TABLE_NAME,
+                rows=row_count,
+                error=str(e),
+            )
+
+    async def ensure_vector_index_after_write(self) -> None:
+        """Build vector index after ingest; upgrade IvfFlat→IvfPq when scale allows."""
+        if self.table is None:
+            return
+        n = await self.table.count_rows()
+        if n < 1:
+            return
+
+        if not self._vector_index_ready:
+            cfg = self._vector_index_config(n)
+            try:
+                await self.table.create_index("vector", config=cfg, replace=True)
+                self._vector_index_ready = True
+                logger.info(
+                    "vector_index_ready",
+                    table=self.TABLE_NAME,
+                    rows=n,
+                    index_type=type(cfg).__name__,
+                )
+            except RuntimeError as e:
+                logger.warning(
+                    "vector_index_build_failed",
+                    table=self.TABLE_NAME,
+                    rows=n,
+                    error=str(e),
+                )
+            return
+
+        await self._upgrade_ivf_flat_to_pq_if_needed(n)
     
     async def _ensure_table(self):
         """Create table if not exists."""
@@ -229,8 +467,9 @@ class LanceDBManager:
         try:
             self.table = await self.db.open_table(self.TABLE_NAME)
             logger.info("Opened existing table", table=self.TABLE_NAME)
+            await self._refresh_vector_index_state()
         except Exception:
-            # Create new table
+            # Create new table (vector index is created after first ingest — IVF cannot train on 0 rows).
             schema = pa.schema([
                 ("id", pa.string()),
                 ("file_path", pa.string()),
@@ -251,24 +490,20 @@ class LanceDBManager:
                 schema=schema,
                 mode="create"
             )
-            
-            # Create vector index
-            await self.table.create_index(
-                "vector",
-                index_type="ivf_pq",
-                metric="cosine",
-                num_partitions=16,
-                num_sub_vectors=8
-            )
-            logger.info("Created new table with index", table=self.TABLE_NAME)
+            self._vector_index_ready = False
     
-    async def upsert_chunks(self, chunks: List[CodeChunk]):
+    async def upsert_chunks(
+        self,
+        chunks: List[CodeChunk],
+        *,
+        refresh_vector_index: bool = True,
+    ):
         """Upsert code chunks with embeddings."""
         if not chunks:
             return
-        
+
         import pyarrow as pa
-        
+
         # Convert to Arrow table
         data = {
             "id": [c.id for c in chunks],
@@ -281,12 +516,22 @@ class LanceDBManager:
             "repo_name": [c.repo_name for c in chunks],
             "vector": [c.vector for c in chunks],
         }
-        
+
         arrow_table = pa.table(data)
+        t_merge = time.perf_counter()
         await self.table.merge_insert("id") \
             .when_matched_update_all() \
             .when_not_matched_insert_all() \
             .execute(arrow_table)
+        merge_ms = (time.perf_counter() - t_merge) * 1000.0
+        logger.debug("lance_merge_insert_ms", ms=round(merge_ms, 2), rows=len(chunks))
+        if refresh_vector_index:
+            t_idx = time.perf_counter()
+            await self.ensure_vector_index_after_write()
+            logger.debug(
+                "lance_vector_index_refresh_ms",
+                ms=round((time.perf_counter() - t_idx) * 1000.0, 2),
+            )
     
     async def search(
         self,
@@ -296,9 +541,7 @@ class LanceDBManager:
         language: Optional[str] = None
     ) -> List[SearchResult]:
         """Search for similar code chunks."""
-        import lancedb.query
-        
-        query = self.table.search(query_vector).metric("cosine").limit(limit)
+        query = (await self.table.search(query_vector)).distance_type("cosine").limit(limit)
 
         # Apply filters — use _safe_str_filter to prevent injection
         filters = []
@@ -312,36 +555,48 @@ class LanceDBManager:
 
         if filters:
             query = query.where(" AND ".join(filters))
-        
-        results = await query.to_pandas()
-        
-        search_results = []
-        for _, row in results.iterrows():
-            # Cosine distance to similarity score
-            score = 1.0 - float(row.get("_distance", 0))
-            
-            search_results.append(SearchResult(
-                id=row["id"],
-                file_path=row["file_path"],
-                content=row["content"][:500],  # Truncate for response
-                language=row["language"],
-                chunk_start=int(row["chunk_start"]),
-                chunk_end=int(row["chunk_end"]),
-                score=score,
-                repo_name=row["repo_name"]
-            ))
-        
+
+        tbl = await query.to_arrow()
+        search_results: List[SearchResult] = []
+        has_dist = "_distance" in tbl.column_names
+        for i in range(tbl.num_rows):
+            dist = float(tbl.column("_distance")[i].as_py()) if has_dist else 0.0
+            score = 1.0 - dist
+            content = tbl.column("content")[i].as_py()
+            if not isinstance(content, str):
+                content = str(content)
+            search_results.append(
+                SearchResult(
+                    id=tbl.column("id")[i].as_py(),
+                    file_path=tbl.column("file_path")[i].as_py(),
+                    content=content[:500],
+                    language=tbl.column("language")[i].as_py(),
+                    chunk_start=int(tbl.column("chunk_start")[i].as_py()),
+                    chunk_end=int(tbl.column("chunk_end")[i].as_py()),
+                    score=score,
+                    repo_name=tbl.column("repo_name")[i].as_py(),
+                )
+            )
+
         return search_results
-    
+
     async def get_existing_hashes(self, repo_name: str) -> dict:
         """Get existing file hashes for incremental indexing."""
-        results = await self.table.query() \
-            .where(_safe_str_filter("repo_name", repo_name)) \
-            .select(["file_path", "file_hash"]) \
-            .to_pandas()
-        
-        # Get unique file_path -> file_hash mapping
-        return dict(zip(results["file_path"], results["file_hash"]))
+        tbl = await (
+            self.table.query()
+            .where(_safe_str_filter("repo_name", repo_name))
+            .select(["file_path", "file_hash"])
+            .to_arrow()
+        )
+        if tbl.num_rows == 0:
+            return {}
+        # Last row per file_path wins (matches previous pandas drop_duplicates(keep="last")).
+        out: dict = {}
+        for i in range(tbl.num_rows - 1, -1, -1):
+            fp = tbl.column("file_path")[i].as_py()
+            if fp not in out:
+                out[fp] = tbl.column("file_hash")[i].as_py()
+        return out
 
 # -----------------------------------------------------------------------------
 # File system watcher
@@ -396,15 +651,28 @@ class CocoIndexer:
     
     async def initialize(self):
         await self.db.connect()
-        self.embedder = EmbeddingClient(settings.embedding_url)
+        _oa = os.environ.get("COCOINDEX_EMBEDDING_OPENAI_COMPATIBLE", "").lower() in ("1", "true", "yes")
+        self.embedder = EmbeddingClient(
+            settings.embedding_url,
+            openai_compatible=_oa,
+            openai_model=os.environ.get("COCOINDEX_EMBEDDING_MODEL_ID", "").strip(),
+            max_concurrent_batches=settings.embedding_max_concurrent_batches,
+        )
         logger.info("Indexer initialized")
     
     async def close(self):
-        if self.embedder:
-            await self.embedder.close()
+        # Stop filesystem watcher first so Watchdog cannot enqueue work during teardown.
         if self.observer:
             self.observer.stop()
             self.observer.join()
+            self.observer = None
+        if self.embedder:
+            await self.embedder.close()
+            self.embedder = None
+        if self.db.db is not None:
+            self.db.db.close()
+            self.db.db = None
+            self.db.table = None
     
     def start_watching(self):
         """Start file system watcher. Must be called from within the running asyncio event loop."""
@@ -413,7 +681,7 @@ class CocoIndexer:
 
         # Capture the running event loop so RepoWatcher can schedule coroutines
         # from Watchdog's OS thread via asyncio.run_coroutine_threadsafe().
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         watcher = RepoWatcher(self, loop)
         self.observer = Observer()
         self.observer.schedule(watcher, settings.repos_path, recursive=True)
@@ -429,7 +697,6 @@ class CocoIndexer:
 
     async def _do_index_repositories(self, force: bool = False) -> IndexResponse:
         """Internal indexing implementation (called under _index_lock)."""
-        import time
         start_time = time.time()
         
         repos_path = Path(settings.repos_path)
@@ -452,6 +719,11 @@ class CocoIndexer:
                 stats["errors"] += 1
         
         duration_ms = (time.time() - start_time) * 1000
+        logger.info(
+            "index_repositories_complete",
+            duration_ms=round(duration_ms, 2),
+            **stats,
+        )
         return IndexResponse(**stats, duration_ms=duration_ms)
     
     async def _index_repository(self, repo_path: Path, force: bool = False) -> dict:
@@ -476,31 +748,42 @@ class CocoIndexer:
                 files_to_process.append(file_path)
         
         logger.info("Found files to index", repo=repo_name, count=len(files_to_process))
-        
-        for file_path in files_to_process:
-            try:
-                relative_path = str(file_path.relative_to(repo_path))
-                content = file_path.read_text(encoding="utf-8", errors="ignore")
-                file_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-                
-                # Skip unchanged files
-                if not force and existing_hashes.get(relative_path) == file_hash:
-                    stats["skipped"] += 1
-                    continue
-                
-                # Chunk the file
-                chunks = self.chunker.chunk_file(relative_path, content, repo_name)
-                all_chunks.extend(chunks)
-                
-                if existing_hashes.get(relative_path):
-                    stats["updated"] += 1
-                else:
-                    stats["indexed"] += 1
-                    
-            except Exception as e:
-                logger.error("Failed to process file", file=str(file_path), error=str(e))
+
+        file_sem = asyncio.Semaphore(settings.max_concurrent_file_tasks)
+
+        async def _one_file(fp: Path):
+            async with file_sem:
+                return await asyncio.to_thread(
+                    _coco_read_and_chunk_file,
+                    repo_path,
+                    fp,
+                    repo_name,
+                    self.chunker,
+                )
+
+        file_results = await asyncio.gather(
+            *[_one_file(fp) for fp in files_to_process],
+            return_exceptions=True,
+        )
+        for file_path, res in zip(files_to_process, file_results):
+            if isinstance(res, BaseException):
+                logger.error(
+                    "Failed to process file",
+                    file=str(file_path),
+                    error=str(res),
+                )
                 stats["errors"] += 1
-        
+                continue
+            relative_path, file_hash, chunks = res
+            if not force and existing_hashes.get(relative_path) == file_hash:
+                stats["skipped"] += 1
+                continue
+            all_chunks.extend(chunks)
+            if existing_hashes.get(relative_path):
+                stats["updated"] += 1
+            else:
+                stats["indexed"] += 1
+
         # Get embeddings in batches
         if all_chunks:
             await self._embed_and_upsert(all_chunks)
@@ -508,25 +791,47 @@ class CocoIndexer:
         logger.info("Repository indexed", repo=repo_name, **stats)
         return stats
     
-    async def _embed_and_upsert(self, chunks: List[CodeChunk]):
-        """Get embeddings and upsert to LanceDB."""
+    async def _embed_and_upsert(
+        self,
+        chunks: List[CodeChunk],
+        *,
+        finalize_vector_index: bool = True,
+    ):
+        """Get embeddings and upsert to LanceDB. One vector-index refresh when finalize_vector_index."""
+        assert self.embedder is not None
         batch_size = settings.embedding_batch_size
-        
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
+        batch_list = [chunks[i : i + batch_size] for i in range(0, len(chunks), batch_size)]
+
+        async def _embed_batch(idx: int, batch: List[CodeChunk]) -> tuple:
             texts = [c.content for c in batch]
-            
-            # Get embeddings
+            t0 = time.perf_counter()
             embeddings = await self.embedder.embed(texts)
-            
-            # Attach embeddings to chunks
+            embed_ms = (time.perf_counter() - t0) * 1000.0
+            logger.debug(
+                "embed_batch_complete",
+                batch_num=idx,
+                size=len(batch),
+                embed_ms=round(embed_ms, 2),
+            )
+            return batch, embeddings
+
+        results = await asyncio.gather(
+            *[_embed_batch(i + 1, b) for i, b in enumerate(batch_list)]
+        )
+        for batch, embeddings in results:
             for chunk, embedding in zip(batch, embeddings):
                 chunk.vector = embedding
-            
-            # Upsert to database
-            await self.db.upsert_chunks(batch)
-            
-            logger.debug("Upserted batch", batch_num=i // batch_size + 1, size=len(batch))
+            await self.db.upsert_chunks(batch, refresh_vector_index=False)
+            logger.debug("lance_upsert_batch", size=len(batch))
+
+        if finalize_vector_index:
+            t_idx = time.perf_counter()
+            await self.db.ensure_vector_index_after_write()
+            logger.info(
+                "vector_index_finalize_ms",
+                ms=round((time.perf_counter() - t_idx) * 1000.0, 2),
+                chunks_total=len(chunks),
+            )
     
     async def index_file(self, file_path: str):
         """Index a single file (for incremental updates)."""
@@ -545,8 +850,13 @@ class CocoIndexer:
             return
         
         try:
-            content = path.read_text(encoding="utf-8", errors="ignore")
-            chunks = self.chunker.chunk_file(relative_file_path, content, repo_name)
+            chunks = await asyncio.to_thread(
+                _coco_watcher_read_chunk,
+                path,
+                relative_file_path,
+                repo_name,
+                self.chunker,
+            )
             await self._embed_and_upsert(chunks)
             logger.info("File indexed", file=file_path)
         except Exception as e:
@@ -554,8 +864,12 @@ class CocoIndexer:
     
     async def search(self, request: SearchRequest) -> List[SearchResult]:
         """Search for code."""
-        # Get query embedding
+        t0 = time.perf_counter()
         embeddings = await self.embedder.embed([request.query])
+        logger.debug(
+            "search_query_embed_ms",
+            ms=round((time.perf_counter() - t0) * 1000.0, 2),
+        )
         query_vector = embeddings[0]
         
         # Search database
@@ -572,6 +886,8 @@ class CocoIndexer:
 # FastAPI app
 # -----------------------------------------------------------------------------
 indexer = CocoIndexer()
+limiter = Limiter(key_func=get_remote_address)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -594,8 +910,11 @@ app = FastAPI(
     title="CocoIndex v1 + LanceDB",
     description="Local Git repository indexing with llama.cpp embeddings",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 @app.get("/health")
 async def health():
@@ -603,10 +922,11 @@ async def health():
     return {"status": "healthy", "indexer_ready": indexer.embedder is not None}
 
 @app.post("/index", response_model=IndexResponse, dependencies=[Depends(require_token)])
-async def index_repos(request: IndexRequest):
+@limiter.limit(settings.rate_limit_index)
+async def index_repos(request: Request, body: IndexRequest):
     """Trigger indexing of repositories. Requires Bearer token."""
     try:
-        result = await indexer.index_repositories(force=request.force_reindex)
+        result = await indexer.index_repositories(force=body.force_reindex)
         return result
     except HTTPException:
         raise
@@ -614,10 +934,11 @@ async def index_repos(request: IndexRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/search", response_model=List[SearchResult], dependencies=[Depends(require_token)])
-async def search(request: SearchRequest):
+@limiter.limit(settings.rate_limit_search)
+async def search_post_body(request: Request, body: SearchRequest):
     """Search indexed code. Requires Bearer token."""
     try:
-        results = await indexer.search(request)
+        results = await indexer.search(body)
         return results
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -625,15 +946,17 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/search", dependencies=[Depends(require_token)])
+@limiter.limit(settings.rate_limit_search)
 async def search_get(
+    request: Request,
     q: str = Query(..., description="Search query"),
     repo: Optional[str] = Query(None, description="Filter by repository"),
     language: Optional[str] = Query(None, description="Filter by language"),
-    limit: int = Query(10, ge=1, le=100)
+    limit: int = Query(10, ge=1, le=100),
 ):
     """Search indexed code (GET endpoint). Requires Bearer token."""
-    request = SearchRequest(query=q, repo=repo, language=language, limit=limit)
-    return await search(request)
+    sr = SearchRequest(query=q, repo=repo, language=language, limit=limit)
+    return await search_post_body(request, sr)
 
 @app.get("/stats", dependencies=[Depends(require_token)])
 async def stats():

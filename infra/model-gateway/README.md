@@ -1,6 +1,6 @@
 # Model gateway
 
-OpenAI-compatible router that forwards requests to vLLM, SGLang, LM Studio proxy, or cloud backends by model id. See [control-plane/doc/MODEL-GATEWAY.md](../../control-plane/doc/MODEL-GATEWAY.md) for the spec and [control-plane/doc/K3S-LLM-DEPLOYMENT.md](../../control-plane/doc/K3S-LLM-DEPLOYMENT.md) for deploy order.
+OpenAI-compatible router that forwards requests to vLLM, SGLang, LM Studio proxy, or cloud backends by model id. See [control-plane/doc/MODEL-GATEWAY.md](../../control-plane/doc/MODEL-GATEWAY.md) for the spec and [control-plane/doc/K3S-LLM-DEPLOYMENT.md](../../control-plane/doc/K3S-LLM-DEPLOYMENT.md) for deploy order. To use **Bifrost** as the gateway, see [BIFROST-INTEGRATION.md](BIFROST-INTEGRATION.md), [bifrost/](bifrost/) (Helm values example + NetworkPolicy), and [BIFROST-RUNBOOK.md](BIFROST-RUNBOOK.md).
 
 ## Build and run locally
 

@@ -55,6 +55,7 @@ func (e *ContainerExecutor) Run(ctx context.Context, payload *Payload, workspace
 	if err != nil {
 		absDir = workspaceDir
 	}
+	_ = WriteHiveMcpJSON(absDir)
 	volume := absDir + ":/workspace"
 	args := []string{
 		"run", "--rm",
@@ -63,12 +64,62 @@ func (e *ContainerExecutor) Run(ctx context.Context, payload *Payload, workspace
 		"-e", "HIVE_RUN_ID=" + payload.RunID,
 		"-w", "/workspace",
 	}
+	if m := strings.TrimSpace(payload.ModelID); m != "" {
+		args = append(args, "-e", "HIVE_MODEL_ID="+m, "-e", "HIVE_MODEL="+m)
+	}
 	if len(payload.Context) > 0 {
 		args = append(args, "-e", "HIVE_CONTEXT_JSON="+base64.StdEncoding.EncodeToString(payload.Context))
 	}
+	if sd := strings.TrimSpace(os.Getenv("HIVE_WORKER_STATE_DIR")); sd != "" {
+		args = append(args, "-e", "HIVE_WORKER_STATE_DIR="+sd)
+	}
+	if cmd := strings.TrimSpace(os.Getenv("HIVE_MCP_SERVER_COMMAND")); cmd != "" {
+		args = append(args, "-e", "HIVE_WORKER_BINARY="+cmd)
+		args = append(args, "-e", "HIVE_MCP_CMD="+cmd+" mcp")
+	} else if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		args = append(args, "-e", "HIVE_WORKER_BINARY="+exe)
+		args = append(args, "-e", "HIVE_MCP_CMD="+exe+" mcp")
+	}
+	args = appendContainerInferenceEnv(args)
 	args = append(args, e.Image, e.Command)
-	// Do not pass host env into container; only HIVE_* are set above.
+	// Only selected env vars are passed (HIVE_* above + inference-related via appendContainerInferenceEnv).
+	// Indexer MCP (HIVE_MCP_*) is intentionally omitted: hive-worker mcp proxies code/doc search using
+	// gateway credentials from the worker pod; agents use stdio MCP only (.mcp.json "hive" server).
 	return e.runner().Run(ctx, e.runtime(), args, "", nil)
+}
+
+// appendContainerInferenceEnv adds -e flags for model-gateway and OpenAI-compatible clients.
+// ProcessExecutor inherits host env via os.Environ(); container runs only receive vars listed here.
+func appendContainerInferenceEnv(args []string) []string {
+	keys := []string{
+		"HIVE_MODEL_GATEWAY_URL",
+		"OPENAI_API_KEY",
+		"OPENAI_BASE_URL",
+		"ANTHROPIC_API_KEY",
+	}
+	seen := make(map[string]string)
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			seen[k] = v
+		}
+	}
+	if gw := strings.TrimSpace(os.Getenv("HIVE_MODEL_GATEWAY_URL")); gw != "" {
+		if _, ok := seen["OPENAI_BASE_URL"]; !ok {
+			seen["OPENAI_BASE_URL"] = gw
+		}
+	}
+	order := []string{
+		"HIVE_MODEL_GATEWAY_URL",
+		"OPENAI_BASE_URL",
+		"OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+	}
+	for _, k := range order {
+		if v, ok := seen[k]; ok {
+			args = append(args, "-e", k+"="+v)
+		}
+	}
+	return args
 }
 
 // IsContainerEnabled returns true if HIVE_ADAPTER_<key>_CONTAINER is 1 or true (case-insensitive).

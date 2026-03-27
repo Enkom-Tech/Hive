@@ -7,6 +7,12 @@ export {
   type UpdateCompany,
 } from "./company.js";
 export {
+  createInferenceModelSchema,
+  createGatewayVirtualKeySchema,
+  type CreateInferenceModel,
+  type CreateGatewayVirtualKey,
+} from "./inference.js";
+export {
   portabilityIncludeSchema,
   portabilitySecretRequirementSchema,
   portabilityCompanyManifestEntrySchema,
@@ -135,6 +141,7 @@ export {
 } from "./secret.js";
 
 export {
+  COST_EVENT_SOURCES,
   createCostEventSchema,
   updateBudgetSchema,
   costsDateRangeQuerySchema,

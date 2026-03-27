@@ -2,7 +2,7 @@
 
 Canonical runbook for deploying Hive on k3s with self-hosted LLMs (vLLM, SGLang, LM Studio), a model gateway, and optional observability. Audience: operators and architects.
 
-**Related:** [AUTOMATED-DEPLOYMENT-AND-RUN-LIFECYCLE.md](AUTOMATED-DEPLOYMENT-AND-RUN-LIFECYCLE.md) (end-to-end flow), [DRONE-SPEC.md](DRONE-SPEC.md) (worker contract), [MANAGED-WORKER-ARCHITECTURE.md](MANAGED-WORKER-ARCHITECTURE.md) (target architecture), [workspace-strategy-and-git-worktrees.md](plans/workspace-strategy-and-git-worktrees.md) (execution workspace).
+**Related:** [AUTOMATED-DEPLOYMENT-AND-RUN-LIFECYCLE.md](AUTOMATED-DEPLOYMENT-AND-RUN-LIFECYCLE.md) (end-to-end flow), [DRONE-SPEC.md](DRONE-SPEC.md) (worker contract), [MANAGED-WORKER-ARCHITECTURE.md](MANAGED-WORKER-ARCHITECTURE.md) (target architecture; **LLM vs MCP**), [MODEL-GATEWAY.md](MODEL-GATEWAY.md) (router contract and policy notes), [Greenfield Bifrost checklist](../../infra/model-gateway/bifrost/GREENFIELD-CHECKLIST.md) (secrets, DB default, sync, metering), [workspace-strategy-and-git-worktrees.md](plans/workspace-strategy-and-git-worktrees.md) (execution workspace).
 
 ## Architecture overview
 
@@ -127,9 +127,19 @@ For best structured-output performance (JSON tools, workflows), run SGLang along
 A single OpenAI-compatible entrypoint for Hive: the drone gets one URL (e.g. `HIVE_MODEL_GATEWAY_URL=http://model-gateway:8080/v1`). The gateway routes by model id to backends (LM Studio proxy, vLLM, SGLang, optional cloud).
 
 - **Contract:** HTTP service exposing `/v1/chat/completions` and `/v1/completions`; config (e.g. `models.yaml`) lists `id`, `base_url`, optional `api_key_env`.
-- **Deployable:** See `infra/model-gateway/` (small app + Dockerfile + k8s Deployment/Service/ConfigMap) or `control-plane/doc/MODEL-GATEWAY.md` for the spec.
+- **Deployable:** See `infra/model-gateway/` (k8s manifests; default image is **`hive-model-gateway-go`**), `infra/model-gateway-go/`, and `control-plane/doc/MODEL-GATEWAY.md`.
 
 Deploy the model gateway after vLLM/SGLang (or LM Studio proxy); set `modelGatewayURL` on HiveWorkerPool (or worker env) so workers use it.
+
+**Catalog and virtual keys:** The board stores routes in `inference_models` and can mint **gateway virtual keys** per company. Export JSON for the cluster with `GET /api/companies/{companyId}/inference-router-config` and follow `infra/model-gateway/SYNC-INFERENCE-CONFIG.md`.
+
+**Usage webhook:** Set on the Go router `METERING_URL` to `https://<control-plane>/api/internal/hive/inference-metering` and `METERING_BEARER` to the same secret as the server’s `HIVE_INTERNAL_OPERATOR_SECRET` or `INTERNAL_OPERATOR_SECRET`. Virtual-key clients then get `cost_events` rows with `source: gateway_aggregate` without agent ids.
+
+**Deployment vs company:** Router keys and catalog rows use **deployment** (`hive_deployments`); spend and limits still roll up under **companies**. Use `deployment_id` when you need operator-wide router config; use `company_id` for in-product attribution.
+
+**Policy and pluggable routers:** A **static** ConfigMap remains valid. If operations need richer policy immediately, you may substitute Envoy AI Gateway, Bifrost, Plano, or similar **as long as** workers still see one OpenAI-compatible base URL via `HIVE_MODEL_GATEWAY_URL` and requests still carry a `model` id (see [MODEL-GATEWAY.md](MODEL-GATEWAY.md)). Bifrost: Helm chart `bifrost/helm-charts/bifrost`, operator runbook `infra/model-gateway/BIFROST-INTEGRATION.md`.
+
+**MCP is not the model gateway:** Deploying the model gateway does **not** implement **drone MCP**. **Control-plane tools** (issues, cost, …) use **`hive-worker mcp`** (stdio) → `/api/worker-api/*` with a worker-instance JWT — see [DRONE-SPEC.md](DRONE-SPEC.md) §7. **Indexer search** uses the same stdio MCP surface: the worker proxies **`code.search` / `documents.search`** (and stats tools) to the tenant **HTTP MCP gateway** in front of CocoIndex/DocIndex; see [MANAGED-WORKER-ARCHITECTURE.md](MANAGED-WORKER-ARCHITECTURE.md) (*LLM routing and MCP surfaces*). Optional stacks: `infra/cocoindex-lancedb/`, `infra/docindex-lancedb/`, `HiveIndexer` / `HiveDocIndexer` in the operator.
 
 ## 6. Control plane placement
 
@@ -162,7 +172,7 @@ From `infra/` (or repo root):
 
 1. **Bootstrap k3s server:** `./scripts/bootstrap-vps.sh` (installs k3s with `--disable traefik`).
 2. **Join workers (optional):** On each node, set `K3S_URL`, `K3S_TOKEN`, then run the k3s install script (or use `./scripts/join-desktop.sh`).
-3. **Storage:** `kubectl apply -f manifests/storage/`.
+3. **Storage:** `kubectl apply -k manifests/storage` (from `infra/`; default RustFS + Dragonfly; see `docs/scripts.md` for overlays).
 4. **Optional:** Format JuiceFS if used; see `./scripts/format-juicefs.sh`.
 5. **Operator and tenants:** Deploy operator (e.g. via ArgoCD from `infra/cluster/applications/`); create tenant with `./scripts/create-tenant.sh`.
 6. **LLM (optional):** Apply `infra/manifests/llm/` (vLLM, optional SGLang, optional lmstudio-proxy); deploy model gateway; set `modelGatewayURL` on HiveWorkerPool or worker env.

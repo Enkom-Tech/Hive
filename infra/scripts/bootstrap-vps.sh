@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap VPS: K3s server, MinIO, DragonflyDB, hive-system namespace.
+# Bootstrap VPS: K3s server, hive-system / hive-storage namespaces (storage stack applied separately).
 # Usage: ./bootstrap-vps.sh [--dry-run]
 set -e
 DRY_RUN=false
@@ -19,4 +19,4 @@ metadata:
   labels:
     hive.io/storage: "true"
 EOF
-echo "Bootstrap complete. Next: kubectl apply -f manifests/storage/"
+echo "Bootstrap complete. Next: kubectl apply -k manifests/storage/"

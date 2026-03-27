@@ -1,0 +1,25 @@
+# MinIO uses juicefs-secret access-key/secret-key as MINIO_ROOT_*; metaurl password must match dragonfly-auth.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-sc
+provisioner: csi.juicefs.com
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: hive-storage
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: juicefs-secret
+  namespace: hive-storage
+stringData:
+  name: hive-fs
+  metaurl: "redis://:changeme-dragonfly@dragonfly.hive-storage.svc.cluster.local:6379/1"
+  storage: "s3"
+  bucket: "http://minio.hive-storage.svc.cluster.local:9000/projects"
+  access-key: "minioadmin"
+  secret-key: "minioadmin"

@@ -1,3 +1,15 @@
+# DragonflyDB: default JuiceFS metadata engine (Redis-compatible protocol).
+# Password must match juicefs-secret `metaurl` (redis://:password@host:port/db).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dragonfly-auth
+  namespace: hive-storage
+type: Opaque
+stringData:
+  # Dev default only — replace via Sealed Secrets / External Secrets in production.
+  password: changeme-dragonfly
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -16,11 +28,9 @@ spec:
     spec:
       containers:
         - name: dragonfly
-          image: dragonflydb/dragonfly:latest
-          args:
-            - "--requirepass=$(DFLY_PASSWORD)"
+          image: ghcr.io/dragonflydb/dragonfly:v1.27.1
           env:
-            - name: DFLY_PASSWORD
+            - name: DFLY_requirepass
               valueFrom:
                 secretKeyRef:
                   name: dragonfly-auth

@@ -15,6 +15,10 @@ Earlier iterations exposed many adapter types (process, HTTP, claude-local, etc.
 - **Agent / employee:** A board identity (e.g. COO, engineer) and the **runtime** that runs when work is assigned (memories, tools, models). The board row and the coding process are the same **agent** at different layers — not a separate “slot” distinct from the agent.
 - **Drone:** The `hive-worker` process. It is the **harness**: holds credentials, connects to the control plane, and runs or spawns agent workloads on the machine or container where it runs.
 
+### Deployment vs company
+
+**Company** in Hive is an in-product org (issues, agents, spend limits). **`hive_deployments`** is a grouping boundary: every company has a `deployment_id`. Model-router catalog rows and gateway virtual keys are keyed by deployment; `cost_events` stay company- (and agent-) scoped unless you emit aggregates such as `source: gateway_aggregate`. A single control-plane instance often uses one default deployment row for all companies; you can add more deployment rows when operators split config or routing.
+
 ### Placement
 
 **Domain split (implemented):** **Fleet** = `worker_instances` (drones). **Identity** = `managed_worker` agents. **Assignment** = `worker_instance_agents` rows, written only via the worker-assignment service — `hello` does not create bindings ([ADR 005](adr/005-fleet-identity-assignment.md)). **Automatic placement** is opt-in: `HIVE_AUTO_PLACEMENT_ENABLED` and `agents.worker_placement_mode = automatic`.
@@ -49,6 +53,28 @@ The control plane has a single "managed worker" (or "hive-worker") adapter. Ther
 Agents do **not** communicate directly with the control plane. They use the worker as a proxy (tools/MCP). So agents do **not** need to manage API keys.
 
 Token usage is the same or lower than today: one heartbeat/status channel per worker, tool responses can be compact, and there are no duplicate auth flows.
+
+### LLM routing and MCP surfaces (three threads)
+
+Keep these separate when reading deployment docs or choosing infrastructure; conflating them makes the architecture look inconsistent.
+
+1. **LLM inference (OpenAI-compatible):** Workers may set `HIVE_MODEL_GATEWAY_URL` so the executor uses a **single base URL** for all chat/completions traffic; each request carries a **`model` id**, and the router forwards to the right backend (vLLM, SGLang, LM Studio proxy, cloud APIs, or a custom/RL-served endpoint once it exposes an OpenAI-compatible URL). Contract: [MODEL-GATEWAY.md](MODEL-GATEWAY.md). k3s runbook: [K3S-LLM-DEPLOYMENT.md](K3S-LLM-DEPLOYMENT.md). Reference implementation: `infra/model-gateway/`. That router is a **pluggable data plane**; Hive’s long-term **policy** (allowlists, budgets, which models exist) lives in the control plane even if the binary is swapped for a third-party AI gateway that honors the same contract.
+
+2. **Indexer / RAG (HTTP MCP gateway):** CocoIndex is reconciled by **`HiveIndexer`**; DocIndex by **`HiveDocIndexer`** (`infra/operator/controllers/indexer_controller.go`, `docindexer_controller.go`). Each can run a **Hive MCP gateway** (`infra/cocoindex-lancedb/mcp_gateway.py`, image `Dockerfile.gateway`) in front of the indexer API. The gateway validates a **worker-tier** token; the indexer **admin** token never reaches agent processes. For DocIndex gateways, the operator sets **`GATEWAY_DOCINDEX_MODE=1`** so the gateway blocks document indexing tools for workers.
+
+3. **Drone MCP (single stdio surface):** Worker-local **stdio MCP** (`hive-worker mcp`) is the **only** MCP server agents should use (`.mcp.json` → `hive`). JSON-RPC handling defaults to **sequential** (`HIVE_MCP_MAX_CONCURRENT=1` or unset); operators may raise it for bounded concurrent `tools/call` (see [DRONE-SPEC.md](DRONE-SPEC.md) §7). It holds the **worker-instance JWT** for **`/api/worker-api/*`** (issues, cost, …) and **proxies** allowed indexer tools to the HTTP gateway using **`HIVE_MCP_CODE_*` / `HIVE_MCP_DOCS_*`** (and legacy **`HIVE_MCP_URL` / `HIVE_MCP_TOKEN`** for code) from the **worker pod**—not from agent containers. Exposed tool names include **`code.search`**, **`code.indexStats`**, **`documents.search`**, **`documents.indexStats`** when the corresponding gateway env vars are set. Optional **WASM** skills live under **`HIVE_PROVISION_CACHE_DIR/skills/`** (`*.wasm` + `{base}.schema.json`). **Trust:** treat `skills/` as **operator-controlled supply chain** (image build, init containers, or signed bundles only); modules run **in-process** with caps: **`HIVE_WASM_SKILL_TIMEOUT_MS`** (default 30s, max 600s), **`HIVE_WASM_MEMORY_LIMIT_PAGES`** (default 256 pages), **`HIVE_WASM_MAX_STDOUT_BYTES`** (default 2MiB, max 16MiB). Bounds reduce runaway CPU/IO but do not sandbox a malicious operator. See [DRONE-SPEC.md](DRONE-SPEC.md) §7.
+
+**Threat model (summary):** Treat the **agent process as untrusted** (prompt injection). **Secrets and policy** live in the worker process, MCP gateway, and control plane—not in agent-visible env for indexer auth. Container executors intentionally do **not** pass `HIVE_MCP_*` into agent containers; agents rely on stdio MCP to the worker binary only.
+
+**Plugins and compiled tools:** Provisioned runtimes, optional manifest hooks, and future plugin-contributed tools are described in [DRONE-SPEC.md](DRONE-SPEC.md) (provisioning) and [plugins/PLUGIN_SPEC.md](plugins/PLUGIN_SPEC.md). They are independent of which component implements the LLM HTTP router.
+
+### Board vs worker principals and worker-api authorization
+
+**Different trust domains:** Board HTTP APIs accept principals of type **`user`**, **`agent`** (API key), or **`system`**, with company access and roles such as **`instance_admin`** as enforced today. **`/api/worker-api/*`** accepts only a **`worker_instance`** JWT (`kind: worker_instance`); board sessions and agent API keys are rejected with **403**. The drone holds the worker JWT; **`hive-worker mcp`** uses it when proxying tool calls to the control plane. That JWT identifies the **fleet row** (`worker_instances`), not the “current” board user.
+
+**Worker API is route-scoped, not MCP tool RBAC:** Authorization for agent-observable tools that hit the board is implemented as **explicit checks per HTTP route** in [`server/src/routes/worker-api.ts`](../server/src/routes/worker-api.ts), not as a permission matrix keyed by MCP tool name. Typical rules: the body/query **`agentId`** must belong to the JWT’s company and not be **`terminated`** or **`pending_approval`**; the issue must be in the same company; **status transition** requires the agent to be the issue **assignee**; mutations on a checked-out **`in_progress`** issue require **`X-Hive-Run-Id`** consistent with checkout. **`role`** on worker-identity slots and similar fields govern **catalogue / placement / board UX**, not a fine-grained ACL over each MCP capability.
+
+**Indexer tools:** Exposure of dangerous indexer HTTP operations is reduced by the **gateway** (worker token, tool blocklists, optional DocIndex mode)—orthogonal to board “roles.”
 
 ### Worker WebSocket authentication
 

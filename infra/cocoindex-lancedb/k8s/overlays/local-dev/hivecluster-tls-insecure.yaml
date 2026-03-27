@@ -1,0 +1,11 @@
+# Local Kind/k3d: control plane often uses HTTP or self-signed certs.
+apiVersion: hive.io/v1alpha1
+kind: HiveCluster
+metadata:
+  name: cocoindex-cluster
+  namespace: cocoindex
+spec:
+  controlPlane:
+    tls:
+      enabled: false
+      skipVerify: true

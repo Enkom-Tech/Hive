@@ -1,0 +1,2 @@
+# Deprecated — use worker/requirements.txt (Dependabot + Dockerfile.worker).
+-r worker/requirements.txt

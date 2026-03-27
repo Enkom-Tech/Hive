@@ -1,35 +1,37 @@
-# CocoIndex v1 + LanceDB — Python dependencies
-# Pin minor versions with upper bounds for reproducibility.
-# Generate a hash-locked file for CI: pip-compile --generate-hashes requirements.txt -o requirements.lock
+# CocoIndex v1 + LanceDB — Python dependencies (production image).
+# Hash lock: pip-compile --generate-hashes requirements.txt -o requirements.lock
+# Dev tools: requirements-dev.txt (CI only).
+#
+# After Dependabot bumps this file, regenerate: pip-compile --generate-hashes requirements.txt -o requirements.lock
 
 # -----------------------------------------------------------------------------
 # Web framework
 # -----------------------------------------------------------------------------
-fastapi>=0.115.0,<0.116.0
-uvicorn[standard]>=0.30.0,<0.31.0
+fastapi>=0.115.0,<0.121.0
+# Plain uvicorn: [standard] extra brings uvloop without == pins and breaks `pip install -r *.lock` with --require-hashes.
+uvicorn>=0.30.0,<0.36.0
 
 # -----------------------------------------------------------------------------
 # Vector Database (embedded mode — no lancedb-cloud needed)
 # -----------------------------------------------------------------------------
-lancedb>=0.21.0,<0.22.0
-pyarrow>=17.0.0,<18.0.0
-numpy>=2.0.0,<2.1.0
+# 0.22+ fixes Pydantic v2 deprecation in query models (lancedb#2315 / #2316).
+lancedb>=0.22.0,<0.31.0
+pyarrow>=17.0.0,<21.0.0
+numpy>=2.0.0,<2.3.0
 
 # -----------------------------------------------------------------------------
 # Embeddings API Client
 # -----------------------------------------------------------------------------
-httpx>=0.27.0,<0.28.0
-orjson>=3.10.0,<4.0.0        # Fast JSON (optional performance improvement)
+httpx>=0.27.0,<0.29.0
 
 # -----------------------------------------------------------------------------
 # Config + Utils
 # -----------------------------------------------------------------------------
-pyyaml>=6.0.2,<7.0
 pydantic>=2.8.0,<3.0
 pydantic-settings>=2.3.0,<3.0
 watchdog>=5.0.2,<6.0
-aiofiles>=24.1.0,<25.0
 structlog>=25.1.0,<26.0
+slowapi>=0.1.9,<0.2.0
 
 # -----------------------------------------------------------------------------
 # MCP Server (SSE transport)
@@ -40,14 +42,3 @@ sse-starlette>=2.0.0,<3.0
 # Hive/DragonflyDB integration
 # -----------------------------------------------------------------------------
 redis>=5.2.1,<6.0            # DragonflyDB compatible
-
-# -----------------------------------------------------------------------------
-# Dev/Test (not installed in production image — use requirements-dev.txt in CI)
-# -----------------------------------------------------------------------------
-# pytest>=8.3.0
-# pytest-asyncio>=0.24.0
-# respx>=0.21.0              # httpx mock for tests
-# bandit[toml]>=1.7.0        # Python SAST
-# ruff>=0.6.0                # Fast linter
-# mypy>=1.11.0               # Type checker
-# pip-tools>=7.4.0           # Lock file generation (pip-compile)

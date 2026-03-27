@@ -51,6 +51,8 @@ type HiveWorkerPoolReconciler struct {
 // +kubebuilder:rbac:groups=hive.io,resources=hiveclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hive.io,resources=hiveindexers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hive.io,resources=hiveindexers/status,verbs=get
+// +kubebuilder:rbac:groups=hive.io,resources=hivedocindexers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hive.io,resources=hivedocindexers/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;create;update;patch;delete
@@ -229,6 +231,18 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if pool.Spec.ModelGatewayURL != "" {
 		envVars = append(envVars, corev1.EnvVar{Name: "HIVE_MODEL_GATEWAY_URL", Value: pool.Spec.ModelGatewayURL})
 	}
+	if sel := pool.Spec.ModelGatewayCredentialSecret; sel != nil && sel.Name != "" && sel.Key != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name: "OPENAI_API_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: sel.Name},
+					Key:                  sel.Key,
+					Optional:             sel.Optional,
+				},
+			},
+		})
+	}
 	if desired == 1 {
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "HIVE_AGENT_ID", ValueFrom: &corev1.EnvVarSource{
@@ -272,37 +286,24 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		)
 	}
 
-	// Inject MCP gateway credentials if a ready HiveIndexer with a gateway exists for this company.
-	// COCOINDEX_API_TOKEN (admin) is NEVER injected here — workers receive only HIVE_MCP_TOKEN.
+	// Inject MCP gateway credentials (worker-tier only). hive-worker mcp proxies tools server-side.
+	// HIVE_MCP_CODE_* / HIVE_MCP_DOCS_* are preferred; HIVE_MCP_URL / HIVE_MCP_TOKEN remain aliases for code indexer.
+	// Deterministic selection: lexicographic by indexer name, or spec.codeIndexerName / spec.docIndexerName.
 	indexerList := &hivev1alpha1.HiveIndexerList{}
-	if err := r.List(ctx, indexerList, client.InNamespace(req.Namespace)); err == nil {
-		for i := range indexerList.Items {
-			idx := &indexerList.Items[i]
-			if idx.Spec.CompanyRef == pool.Spec.CompanyRef &&
-				idx.Status.Ready &&
-				idx.Status.GatewayURL != "" &&
-				idx.Status.GatewaySecretName != "" {
-				envVars = append(envVars,
-					corev1.EnvVar{
-						Name:  "HIVE_MCP_URL",
-						Value: idx.Status.GatewayURL + "/mcp",
-					},
-					corev1.EnvVar{
-						Name: "HIVE_MCP_TOKEN",
-						ValueFrom: &corev1.EnvVarSource{
-							SecretKeyRef: &corev1.SecretKeySelector{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: idx.Status.GatewaySecretName,
-								},
-								Key: "token",
-							},
-						},
-					},
-				)
-				break
-			}
-		}
+	if err := r.List(ctx, indexerList, client.InNamespace(req.Namespace)); err != nil {
+		logger.Error(err, "list HiveIndexer for MCP env")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	docIndexerList := &hivev1alpha1.HiveDocIndexerList{}
+	if err := r.List(ctx, docIndexerList, client.InNamespace(req.Namespace)); err != nil {
+		logger.Error(err, "list HiveDocIndexer for MCP env")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	codeEnv, codeCond := mcpCodeIndexerEnv(pool, indexerList)
+	envVars = append(envVars, codeEnv...)
+	docEnv, docCond := mcpDocIndexerEnv(pool, docIndexerList)
+	envVars = append(envVars, docEnv...)
+	pool.Status.Conditions = mergeWorkerPoolMCPConditions(pool.Status.Conditions, pool.Generation, codeCond, docCond)
 
 	pvcName := "workspace-" + company.Spec.CompanyID
 	workerPullPolicy := workerImagePullPolicy(pool.Spec.WorkerImage)
@@ -396,9 +397,23 @@ func (r *HiveWorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 // SetupWithManager sets up the controller with the Manager.
-// Watches HiveIndexer so that when an indexer becomes ready (or its gateway URL changes),
-// all WorkerPools for the same company are reconciled and receive the updated MCP credentials.
+// Watches HiveIndexer / HiveDocIndexer so gateway URL or readiness changes roll out to worker pools.
 func (r *HiveWorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	enqueuePoolsForCompany := func(ctx context.Context, companyRef, ns string) []reconcile.Request {
+		poolList := &hivev1alpha1.HiveWorkerPoolList{}
+		if err := r.List(ctx, poolList, client.InNamespace(ns)); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for _, pool := range poolList.Items {
+			if pool.Spec.CompanyRef == companyRef {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Namespace: pool.Namespace, Name: pool.Name},
+				})
+			}
+		}
+		return requests
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hivev1alpha1.HiveWorkerPool{}).
 		Watches(
@@ -408,22 +423,17 @@ func (r *HiveWorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if !ok {
 					return nil
 				}
-				poolList := &hivev1alpha1.HiveWorkerPoolList{}
-				if err := r.List(ctx, poolList, client.InNamespace(indexer.Namespace)); err != nil {
+				return enqueuePoolsForCompany(ctx, indexer.Spec.CompanyRef, indexer.Namespace)
+			}),
+		).
+		Watches(
+			&hivev1alpha1.HiveDocIndexer{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				d, ok := obj.(*hivev1alpha1.HiveDocIndexer)
+				if !ok {
 					return nil
 				}
-				var requests []reconcile.Request
-				for _, pool := range poolList.Items {
-					if pool.Spec.CompanyRef == indexer.Spec.CompanyRef {
-						requests = append(requests, reconcile.Request{
-							NamespacedName: types.NamespacedName{
-								Namespace: pool.Namespace,
-								Name:      pool.Name,
-							},
-						})
-					}
-				}
-				return requests
+				return enqueuePoolsForCompany(ctx, d.Spec.CompanyRef, d.Namespace)
 			}),
 		).
 		Complete(r)

@@ -47,7 +47,24 @@ spec:
                     type: string
                 modelGatewayURL:
                   type: string
-                  description: OpenAI-compatible base URL for LLM inference (e.g. model gateway). When set, the worker receives HIVE_MODEL_GATEWAY_URL.
+                  description: OpenAI-compatible base URL for LLM inference (e.g. hive-model-gateway-go or Bifrost). When set, the worker receives HIVE_MODEL_GATEWAY_URL (include /v1). hive-worker derives OPENAI_BASE_URL from this when unset.
+                modelGatewayCredentialSecret:
+                  type: object
+                  description: SecretKeySelector in the tenant namespace for OPENAI_API_KEY (e.g. Bifrost sk-bf-*). Populate the Secret via the board or automation; never put raw tokens in the HiveWorkerPool spec.
+                  required: [name, key]
+                  properties:
+                    name:
+                      type: string
+                    key:
+                      type: string
+                    optional:
+                      type: boolean
+                codeIndexerName:
+                  type: string
+                  description: metadata.name of the HiveIndexer to use for HIVE_MCP_CODE_* when multiple indexers exist for the company. If empty, the operator selects the lexicographically first ready HiveIndexer that has a gateway URL and secret.
+                docIndexerName:
+                  type: string
+                  description: metadata.name of the HiveDocIndexer to use for HIVE_MCP_DOCS_* when multiple document indexers exist for the company. If empty, the operator selects the lexicographically first ready HiveDocIndexer that has a gateway URL and secret.
             status:
               type: object
               properties:

@@ -26,10 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-# Install from requirements.txt (requirements.lock used in CI for hash verification)
+COPY requirements.lock .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.lock
 
 # -----------------------------------------------------------------------------
 # Stage 2: Minimal production runtime
@@ -47,11 +46,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user — UID 65534 (nobody) matches Hive operator security policy
-# (workerpool_controller.go uses runAsUser: 65534 for all managed pods)
-RUN groupadd -r cocoindex --gid=65534 && \
-    useradd -r -g cocoindex -u 65534 -M cocoindex && \
-    mkdir -p /data/repos /data/lancedb /app && \
+# UID/GID 65534 — Debian slim already defines nobody/nogroup; do not groupadd (fails: GID exists).
+# Matches Hive operator policy (runAsUser: 65534 for managed pods).
+RUN mkdir -p /data/repos /data/lancedb /app && \
     chown -R 65534:65534 /data /app
 
 # Copy Python site-packages from deps stage
@@ -70,6 +67,9 @@ EXPOSE 8080
 # Healthcheck — unauthenticated, required for K8s liveness/readiness probes
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
+
+# Production lock uses plain uvicorn so --require-hashes installs succeed; extras are optional for local perf tuning.
+# Reproducible base: pin digest when upgrading python:3.12-slim, e.g. FROM python:3.12-slim@sha256:<digest>
 
 # Run the Python FastAPI server directly
 ENTRYPOINT ["python", "cocoindex_server.py"]

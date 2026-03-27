@@ -1,0 +1,7 @@
+# SYNC: ../../namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hive-storage
+  labels:
+    hive.io/storage: "true"

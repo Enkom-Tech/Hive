@@ -51,7 +51,9 @@ type Client struct {
 	Store    *runstore.Store
 	AgentID  string
 	Token    string
-	WSURL    string
+	// WorkerApiToken is the persisted HS256 JWT for POST /api/worker-api (set from WebSocket worker_api_token).
+	WorkerApiToken string
+	WSURL          string
 	// StateDir is the directory for persisted instance-id (default: UserConfigDir/hive-worker when empty).
 	StateDir string
 	// AllowedAgentIDs, if non-empty, rejects run messages whose agentId is not in this list (multi-agent / pool host).
@@ -62,6 +64,9 @@ type Client struct {
 func (c *Client) Run(ctx context.Context) error {
 	if c.WSURL == "" || c.Token == "" {
 		return nil
+	}
+	if t := ReadWorkerApiToken(c.StateDir); t != "" {
+		c.WorkerApiToken = t
 	}
 	for {
 		select {
@@ -285,6 +290,8 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 			RunID                    string          `json:"runId"`
 			AgentID                  string          `json:"agentId"`
 			AdapterKey               string          `json:"adapterKey"`
+			ModelID                  string          `json:"modelId"`
+			Model                    string          `json:"model"`
 			Context                  json.RawMessage `json:"context"`
 			PlacementID              string          `json:"placementId"`
 			ExpectedWorkerInstanceID string          `json:"expectedWorkerInstanceId"`
@@ -300,6 +307,18 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 				} else {
 					c.Token = tok
 					log.Printf("link: stored link token for reconnect (remove HIVE_DRONE_PROVISION_TOKEN from the service environment if the process still has the one-time value)")
+				}
+			}
+			continue
+		}
+		if msg.Type == "worker_api_token" {
+			tok := strings.TrimSpace(msg.Token)
+			if tok != "" {
+				if err := PersistWorkerApiToken(c.StateDir, tok); err != nil {
+					log.Printf("link: persist worker api token: %v", err)
+				} else {
+					c.WorkerApiToken = tok
+					log.Printf("link: stored worker API token for hive-worker mcp")
 				}
 			}
 			continue
@@ -348,6 +367,10 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 				}
 			}
 			adapterKey := msg.AdapterKey
+			runModelID := strings.TrimSpace(msg.ModelID)
+			if runModelID == "" {
+				runModelID = strings.TrimSpace(msg.Model)
+			}
 			registry := c.Registry
 			store := c.Store
 			go func() {
@@ -368,8 +391,16 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 					AgentID: agentID,
 					RunID:   runID,
 					Context: msg.Context,
+					ModelID: runModelID,
 				}
 				workspaceDir := workspaceDirFromContext(msg.Context)
+				absWorkspace := workspaceDir
+				if strings.TrimSpace(absWorkspace) == "" {
+					absWorkspace = executor.DefaultWorkspaceRoot()
+				}
+				if ap, err := filepath.Abs(absWorkspace); err == nil {
+					absWorkspace = ap
+				}
 				var stdout, stderr []byte
 				var runErr error
 				ex := registry.Executor(adapterKey)
@@ -387,11 +418,12 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 				}
 
 				finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
+				side := ReadRunUsageSidecar(absWorkspace)
 				if ctxRun.Err() != nil {
 					sendStatus(runID, agentID, statusCancelled, nil, "")
 				} else if runErr != nil {
 					exitOne := 1
-					send(map[string]interface{}{
+					failPayload := map[string]interface{}{
 						"type":          "status",
 						"runId":         runID,
 						"agentId":       agentID,
@@ -401,10 +433,12 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 						"finishedAt":    finishedAt,
 						"stdoutExcerpt": excerpt(string(stdout), 4096),
 						"stderrExcerpt": excerpt(string(stderr), 4096),
-					})
+					}
+					MergeRunUsageIntoStatus(failPayload, side, runModelID)
+					send(failPayload)
 				} else {
 					exitZero := 0
-					send(map[string]interface{}{
+					okPayload := map[string]interface{}{
 						"type":          "status",
 						"runId":         runID,
 						"agentId":       agentID,
@@ -413,7 +447,9 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 						"finishedAt":    finishedAt,
 						"stdoutExcerpt": excerpt(string(stdout), 4096),
 						"stderrExcerpt": excerpt(string(stderr), 4096),
-					})
+					}
+					MergeRunUsageIntoStatus(okPayload, side, runModelID)
+					send(okPayload)
 				}
 
 				if workspacesync.Enabled() {

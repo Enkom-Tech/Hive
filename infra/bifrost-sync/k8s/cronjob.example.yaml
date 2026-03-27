@@ -1,0 +1,60 @@
+# Example CronJob: sync Hive inference-router-config → Bifrost openai provider keys.
+# Build image from infra/bifrost-sync or run the binary from a generic Go toolchain image.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hive-bifrost-sync
+  namespace: hive-llm
+stringData:
+  board_token: "replace-with-board-jwt"
+  bifrost_token: "replace-with-bifrost-governance-bearer"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hive-bifrost-sync
+  namespace: hive-llm
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: default
+          containers:
+            - name: sync
+              image: your-registry/hive-bifrost-sync:latest
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: HIVE_BIFROST_SYNC_BOARD_BASE_URL
+                  value: "http://hive-board.hive-control-plane.svc.cluster.local:3100"
+                - name: HIVE_BIFROST_SYNC_BOARD_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hive-bifrost-sync
+                      key: board_token
+                - name: HIVE_BIFROST_SYNC_BIFROST_BASE_URL
+                  value: "http://bifrost.hive-llm.svc.cluster.local:8080"
+                - name: HIVE_BIFROST_SYNC_BIFROST_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hive-bifrost-sync
+                      key: bifrost_token
+                - name: HIVE_BIFROST_SYNC_COMPANY_IDS
+                  value: "550e8400-e29b-41d4-a716-446655440000"
+                - name: HIVE_BIFROST_SYNC_ALLOWED_HOST_SUFFIXES
+                  value: ".svc.cluster.local,.svc"
+                - name: HIVE_BIFROST_SYNC_PROVIDER_KEY_VALUE
+                  value: "local-keyless"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi

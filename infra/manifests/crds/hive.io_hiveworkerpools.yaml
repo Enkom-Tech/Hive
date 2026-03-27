@@ -47,7 +47,13 @@ spec:
                     type: string
                 modelGatewayURL:
                   type: string
-                  description: OpenAI-compatible base URL for LLM inference (e.g. model gateway). When set, the worker receives HIVE_MODEL_GATEWAY_URL.
+                  description: OpenAI-compatible base URL for LLM inference (e.g. hive-model-gateway-go or Bifrost). When set, the worker receives HIVE_MODEL_GATEWAY_URL (include /v1). For Bifrost with mandatory virtual keys, also set OPENAI_API_KEY (sk-bf-...) on the worker pod; containerized adapters receive gateway-related env from the worker when set.
+                codeIndexerName:
+                  type: string
+                  description: metadata.name of the HiveIndexer for HIVE_MCP_CODE_* when multiple indexers exist; empty means lexicographically first ready indexer with a gateway.
+                docIndexerName:
+                  type: string
+                  description: metadata.name of the HiveDocIndexer for HIVE_MCP_DOCS_* when multiple doc indexers exist; empty means lexicographically first ready indexer with a gateway.
             status:
               type: object
               properties:

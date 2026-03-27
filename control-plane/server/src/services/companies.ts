@@ -1,5 +1,6 @@
 import { eq, count } from "drizzle-orm";
 import type { Db } from "@hive/db";
+import { DEFAULT_HIVE_DEPLOYMENT_ID } from "@hive/shared";
 import {
   companies,
   agents,
@@ -52,13 +53,14 @@ export function companyService(db: Db) {
 
   async function createCompanyWithUniquePrefix(data: typeof companies.$inferInsert) {
     const base = deriveIssuePrefixBase(data.name);
+    const deploymentId = data.deploymentId ?? DEFAULT_HIVE_DEPLOYMENT_ID;
     let suffix = 1;
     while (suffix < 10000) {
       const candidate = `${base}${suffixForAttempt(suffix)}`;
       try {
         const rows = await db
           .insert(companies)
-          .values({ ...data, issuePrefix: candidate })
+          .values({ ...data, deploymentId, issuePrefix: candidate })
           .returning();
         return rows[0];
       } catch (error) {

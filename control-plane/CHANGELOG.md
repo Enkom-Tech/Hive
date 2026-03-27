@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Worker API issue create - opaque idempotency:** optional header `X-Hive-Worker-Idempotency-Key` on `POST /api/worker-api/issues` (DB-backed replay of the first **201**). MCP `issue.create` optional `idempotencyKey`. Migration `0046_worker_api_idempotency`.
+
+### Worker API — issue create/update and agent hire (MCP)
+
+- **HTTP (worker JWT):** `POST /api/worker-api/issues`, `PATCH /api/worker-api/issues/:issueId` (no `status` in body — use existing transition route), `POST /api/worker-api/agent-hires`. Board-parity validation, activity (`worker_api.issue_create`, `worker_api.issue_update`, `worker_api.agent_hire`), and permission gates (`assign` for assignee changes, `agents:create` for hires).
+- **hive-worker MCP:** `issue.create`, `issue.update`, `agent.requestHire` proxy to the same routes via `CPClient`.
+- **Prometheus:** `hive_worker_api_*` route labels include `issue_create`, `issue_update`, `agent_hire`.
+- **Docs:** [DRONE-SPEC.md](doc/DRONE-SPEC.md) §7 matrix; [workers.md](docs/api/workers.md).
+
 ### Drone full automation (identity catalogue + placement)
 
 - **PostgreSQL:** `worker_identity_desired_slots`, `agents.worker_identity_slot_id`, `agents.last_automatic_placement_failure*` (migration `0041`).
@@ -10,13 +19,13 @@
 - **Placement:** Automatic bind prefers **least-loaded** eligible drones; failed auto-bind sets **`last_automatic_placement_failure`** on the agent.
 - **Assets:** [`infra/worker/auto-deploy/`](../infra/worker/auto-deploy/).
 
-### Managed worker provisioning and tool bridge
+### Managed worker provisioning and worker API (MCP)
 
 - **HTTP:** `GET /api/worker-downloads/provision-manifest` — operator-defined runtime manifest (`HIVE_WORKER_PROVISION_MANIFEST_JSON` / `HIVE_WORKER_PROVISION_MANIFEST_FILE`). Sensitive rate limit when API limits apply.
 - **HTTP:** `GET /api/companies/:companyId/worker-runtime/manifest` — effective manifest (company `workerRuntimeManifestJson` overrides global). Auth: board, same-company agent, or unconsumed `hive_dpv_` for that company.
-- **HTTP:** `POST /api/worker-tools/bridge` — agent-only; **`HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS`** comma allowlist (empty = disabled). Actions: `cost.report`, `issue.appendComment`, `issue.transitionStatus`, **`issue.get`**. Activity `worker.tool_bridge`.
+- **HTTP:** `POST /api/worker-api/*` — **worker-instance JWT** only (`HIVE_WORKER_JWT_SECRET`); agents no longer use API keys for these tools. **`hive-worker mcp`** stdio MCP proxies to worker-api. Removed `POST /api/worker-tools/bridge` and **`HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS`**. Activity `worker_api.*`.
 - **hive-worker:** `HIVE_PROVISION_MANIFEST_BEARER`; manifest fetch sends `Authorization: Bearer` from bearer env or link credentials. Optional `HIVE_PROVISION_MANIFEST_HOOKS=1` runs `aptPackages` / `npmGlobal` / `dockerImages` from the manifest at startup (non-distroless images only). Optional **`HIVE_PROVISION_MANIFEST_PUBLIC_KEY`** enforces **`X-Hive-Manifest-Signature`** (Ed25519) on manifest HTTP responses. **Server signing:** optional **`HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY_FILE`** / **`HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY`** adds **`X-Hive-Manifest-Signature`** to manifest GET responses.
-- **Docs:** [`infra/worker/PROVISIONER-SPLIT.md`](../infra/worker/PROVISIONER-SPLIT.md), MCP shim [`scripts/mcp-worker-bridge.mjs`](scripts/mcp-worker-bridge.mjs), [mcp-worker-bridge guide](docs/guides/agent-developer/mcp-worker-bridge.md).
+- **Docs:** [`infra/worker/PROVISIONER-SPLIT.md`](../infra/worker/PROVISIONER-SPLIT.md), [worker MCP guide](docs/guides/agent-developer/mcp-worker-bridge.md). **`scripts/mcp-worker-bridge.mjs`** is deprecated (use `hive-worker mcp`).
 
 ### Fleet / identity / assignment (ADR 005)
 

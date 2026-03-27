@@ -1,0 +1,60 @@
+# Hive DocIndex parser worker — Docling + Unstructured (heavy). No API token, no LanceDB.
+#
+# Dependencies: locked `worker/requirements.lock` (regenerate via Linux pip-compile; see worker/requirements.txt).
+# Lock embeds `--extra-index-url` for PyTorch CPU wheels (no CUDA). Regenerate: `docker run ... python:3.12-bookworm pip-compile ...`.
+#
+# Usage:
+#   docker build -f Dockerfile.worker -t docindex-worker:latest .
+#   docker run --rm \
+#     -e DOCINDEX_REDIS_URL=redis://queue:6379/0 \
+#     -e DOCINDEX_EMBEDDING_URL=http://llama-embeddings:8080 \
+#     -v /path/to/docs:/data/docs:ro \
+#     docindex-worker:latest
+
+FROM python:3.12-bookworm AS deps
+
+WORKDIR /deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        ca-certificates \
+        libmagic1 \
+        poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY worker/requirements.lock /deps/requirements.lock
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /deps/requirements.lock
+
+FROM python:3.12-bookworm
+
+LABEL org.opencontainers.image.title="Hive DocIndex parser worker"
+LABEL org.opencontainers.image.description="Heavy DocIndex worker (Docling/Unstructured + Redis queue)"
+LABEL org.opencontainers.image.source="https://github.com/enkom/hive-infra"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libmagic1 \
+        poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /data/docs /app /tmp && \
+    chown -R 65534:65534 /data /app /tmp
+
+COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=deps /usr/local/bin /usr/local/bin
+
+COPY --chown=65534:65534 \
+    docindex_worker.py \
+    document_parsers.py \
+    document_chunker.py \
+    docindex_jobs.py \
+    docindex_constants.py \
+    /app/
+
+WORKDIR /app
+ENV HOME=/tmp
+USER 65534:65534
+
+ENTRYPOINT ["python", "docindex_worker.py"]

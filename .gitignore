@@ -27,6 +27,21 @@ testbin/
 .DS_Store
 Thumbs.db
 
+# Python (infra services, tooling)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+.venv-*/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+
 # Logs and temp
 *.log
 tmp/

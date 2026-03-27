@@ -1,0 +1,95 @@
+# Network isolation for DocIndex (same namespace as Deployments in docindex.yaml).
+# Requires a CNI that enforces NetworkPolicy. If embeddings run outside this namespace,
+# add egress rules (namespaceSelector / ipBlock) or relax policy accordingly.
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: docindex-api-egress
+  namespace: docindex
+spec:
+  podSelector:
+    matchLabels:
+      app: docindex
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dragonfly
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: llama-embeddings
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: docindex-parser-worker-egress
+  namespace: docindex
+spec:
+  podSelector:
+    matchLabels:
+      app: docindex-parser-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: dragonfly
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: llama-embeddings
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: docindex-parser-worker-no-ingress
+  namespace: docindex
+spec:
+  podSelector:
+    matchLabels:
+      app: docindex-parser-worker
+  policyTypes:
+    - Ingress
+  ingress: []

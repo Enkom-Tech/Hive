@@ -1,6 +1,7 @@
-# MCP Gateway image — secure proxy between worker agents and CocoIndex.
+# MCP Gateway image — secure proxy between worker agents and CocoIndex or DocIndex.
 # Validates worker-tier HIVE_MCP_TOKEN, blocks admin operations,
 # and forwards approved calls to the indexer using the admin token.
+# For DocIndex APIs (port 8082), set env GATEWAY_DOCINDEX_MODE=1 (HiveDocIndexer operator does this).
 #
 # UID 65534 (nobody) matches the operator's security policy.
 # Build: docker build -f Dockerfile.gateway -t hive-mcp-gateway:latest .
@@ -32,6 +33,7 @@ COPY --from=deps /usr/local/lib/python3.12/site-packages \
 COPY --from=deps /usr/local/bin/uvicorn /usr/local/bin/uvicorn
 
 COPY mcp_gateway.py /app/mcp_gateway.py
+COPY mcp-gateway-go/blocklist.json /app/mcp-gateway-go/blocklist.json
 
 USER 65534:65534
 WORKDIR /app

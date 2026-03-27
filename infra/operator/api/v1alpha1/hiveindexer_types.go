@@ -110,6 +110,7 @@ type HiveIndexerStatus struct {
 	GatewaySecretName string `json:"gatewaySecretName,omitempty"`
 
 	// Conditions represent the latest available observations of the indexer's state.
+	// Type IndexerDegraded: True when the indexer Deployment or (if configured) MCP gateway Deployment has no ready replicas.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }

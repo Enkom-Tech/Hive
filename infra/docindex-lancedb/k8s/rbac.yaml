@@ -1,0 +1,18 @@
+# ServiceAccounts for DocIndex components.
+# automountServiceAccountToken: false prevents K8s API credentials from being
+# injected into pods that have no need to call the K8s API.
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: docindex-api
+  namespace: docindex
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: docindex-worker
+  namespace: docindex
+automountServiceAccountToken: false

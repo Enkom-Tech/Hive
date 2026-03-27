@@ -1,0 +1,283 @@
+# Minimal Kubernetes example for Hive DocIndex (adjust namespace, images, secrets).
+# Components: Dragonfly-compatible queue (Redis wire protocol), slim API Deployment,
+# parser worker Deployment, llama.cpp embeddings Service (deploy separately).
+#
+# Required secrets (do not commit values — see docs/secrets.md):
+#   kubectl create secret generic docindex-api-token --from-literal=token=<value>
+#   kubectl create secret generic docindex-queue-creds \
+#     --from-literal=redis-url='rediss://:PASSWORD@docindex-dragonfly.docindex.svc.cluster.local:6380/0'
+#   kubectl create secret generic docindex-job-signing-key --from-literal=key=<value>
+#     (generate: openssl rand -hex 32)
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docindex-dragonfly
+  namespace: docindex
+  labels:
+    app: dragonfly
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dragonfly
+  template:
+    metadata:
+      labels:
+        app: dragonfly
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dragonfly
+          image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.4
+          args:
+            - --logtostderr
+            - --tls
+            - --tls_port=6380
+            - --tls_cert_file=/tls/tls.crt
+            - --tls_key_file=/tls/tls.key
+            - --no_tls_on_admin_port
+          ports:
+            - containerPort: 6380
+              name: redis-tls
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: queue-tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: queue-tls
+          secret:
+            secretName: docindex-queue-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docindex-dragonfly
+  namespace: docindex
+  labels:
+    app: dragonfly
+spec:
+  selector:
+    app: dragonfly
+  ports:
+    - port: 6380
+      targetPort: 6380
+      name: redis-tls
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docindex
+  namespace: docindex
+  labels:
+    app: docindex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docindex
+  template:
+    metadata:
+      labels:
+        app: docindex
+    spec:
+      serviceAccountName: docindex-api
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+      containers:
+        - name: docindex
+          image: docindex:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+              name: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          env:
+            - name: HOME
+              value: /tmp
+            - name: DOCINDEX_DOCS_PATH
+              value: "/data/docs"
+            - name: DOCINDEX_LANCEDB_URI
+              value: "/data/lancedb"
+            - name: DOCINDEX_EMBEDDING_URL
+              value: "http://llama-embeddings:8080"
+            - name: DOCINDEX_EMBEDDING_DIM
+              value: "4096"
+            - name: DOCINDEX_API_HOST
+              value: "0.0.0.0"
+            - name: DOCINDEX_API_PORT
+              value: "8082"
+            - name: DOCINDEX_INDEX_ON_STARTUP
+              value: "true"
+            - name: DOCINDEX_WATCH_DOCS
+              value: "true"
+            - name: DOCINDEX_USE_WORKER_QUEUE
+              value: "true"
+            - name: DOCINDEX_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: docindex-queue-creds
+                  key: redis-url
+            - name: DOCINDEX_JOB_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: docindex-job-signing-key
+                  key: key
+            - name: DOCINDEX_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: docindex-api-token
+                  key: token
+          volumeMounts:
+            - name: docs
+              mountPath: /data/docs
+              readOnly: true
+            - name: lancedb
+              mountPath: /data/lancedb
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: docs
+          persistentVolumeClaim:
+            claimName: docindex-docs-pvc
+        - name: lancedb
+          persistentVolumeClaim:
+            claimName: docindex-lancedb-pvc
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docindex-parser-worker
+  namespace: docindex
+  labels:
+    app: docindex-parser-worker
+spec:
+  # Scale out (e.g. 2–4) for higher parse throughput: workers share one Redis job list (BRPOP).
+  # Require DOCINDEX_JOB_SIGNING_KEY on API + worker in production; do not raise ThreadPoolExecutor
+  # workers inside one process unless parsers are verified thread-safe.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docindex-parser-worker
+  template:
+    metadata:
+      labels:
+        app: docindex-parser-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+      serviceAccountName: docindex-worker
+      automountServiceAccountToken: false
+      containers:
+        - name: parser-worker
+          image: docindex-worker:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "4000m"
+              memory: "8Gi"
+          env:
+            - name: HOME
+              value: /tmp
+            - name: DOCINDEX_DOCS_PATH
+              value: "/data/docs"
+            - name: DOCINDEX_EMBEDDING_URL
+              value: "http://llama-embeddings:8080"
+            - name: DOCINDEX_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: docindex-queue-creds
+                  key: redis-url
+            - name: DOCINDEX_JOB_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: docindex-job-signing-key
+                  key: key
+            - name: DOCINDEX_EMBEDDING_BATCH_SIZE
+              value: "32"
+          volumeMounts:
+            - name: docs
+              mountPath: /data/docs
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: docs
+          persistentVolumeClaim:
+            claimName: docindex-docs-pvc
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docindex-api
+  namespace: docindex
+spec:
+  selector:
+    app: docindex
+  ports:
+    - port: 8082
+      targetPort: 8082
+      name: http

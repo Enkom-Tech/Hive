@@ -5,7 +5,8 @@ Hive MCP Gateway — secure proxy between worker agents and the CocoIndex MCP se
 Security responsibilities:
   1. Authenticate workers using the GATEWAY_WORKER_TOKEN (worker-tier, search-only).
      Workers receive this token as HIVE_MCP_TOKEN; they NEVER see the admin token.
-  2. Block admin operations: index_repository, delete_repo are not proxied.
+  2. Block admin operations per mcp-gateway-go/blocklist.json (shared with the Go gateway).
+     Override path with GATEWAY_WORKER_BLOCKLIST_FILE if needed.
   3. Scope searches: injects repo filter from task context when provided.
   4. Audit log: every MCP tool call is logged with agentId, query, timestamp.
   5. Forward approved calls to the indexer using GATEWAY_ADMIN_TOKEN.
@@ -17,6 +18,7 @@ import asyncio
 import hmac
 import json
 import os
+from pathlib import Path
 
 import httpx
 import structlog
@@ -39,8 +41,29 @@ _WORKER_TOKEN = os.environ.get("GATEWAY_WORKER_TOKEN", "")   # HIVE_MCP_TOKEN gi
 _ADMIN_TOKEN = os.environ.get("GATEWAY_ADMIN_TOKEN", "")     # COCOINDEX_API_TOKEN for the indexer
 _INDEXER_URL = os.environ.get("GATEWAY_INDEXER_URL", "http://localhost:8080")  # indexer ClusterIP
 
-# Admin tool names that must never be proxied to workers
-_BLOCKED_TOOLS = frozenset({"index_repository", "delete_repo", "force_reindex"})
+def _default_blocklist_path() -> Path:
+    return Path(__file__).resolve().parent / "mcp-gateway-go" / "blocklist.json"
+
+
+def _load_blocklist_file() -> dict:
+    """Load cocoindex/docindex blocked tool lists (same JSON as mcp-gateway-go embed)."""
+    raw = os.environ.get("GATEWAY_WORKER_BLOCKLIST_FILE", "").strip()
+    path = Path(raw) if raw else _default_blocklist_path()
+    if not path.is_file():
+        raise FileNotFoundError(f"MCP gateway blocklist not found: {path}")
+    with path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+_bl = _load_blocklist_file()
+_BLOCKED_COCOINDEX_TOOLS = frozenset(_bl["cocoindex"])
+_BLOCKED_DOCINDEX_TOOLS = frozenset(_bl["docindex"])
+
+
+def _blocked_tools() -> frozenset:
+    if os.environ.get("GATEWAY_DOCINDEX_MODE", "").strip() in ("1", "true", "yes"):
+        return _BLOCKED_DOCINDEX_TOOLS
+    return _BLOCKED_COCOINDEX_TOOLS
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -127,11 +150,12 @@ async def mcp_message(body: dict, creds: HTTPAuthorizationCredentials = Security
         }
 
     # For tools/list, filter out blocked tools before returning
+    blocked = _blocked_tools()
     if method == "tools/list":
         resp = await _call_indexer_mcp(body)
         if "result" in resp and "tools" in resp["result"]:
             resp["result"]["tools"] = [
-                t for t in resp["result"]["tools"] if t.get("name") not in _BLOCKED_TOOLS
+                t for t in resp["result"]["tools"] if t.get("name") not in blocked
             ]
         return resp
 
@@ -140,7 +164,7 @@ async def mcp_message(body: dict, creds: HTTPAuthorizationCredentials = Security
         tool_name = params.get("name", "")
         args = params.get("arguments", {})
 
-        if tool_name in _BLOCKED_TOOLS:
+        if tool_name in blocked:
             logger.warning(
                 "mcp_gateway.blocked_tool",
                 tool=tool_name,

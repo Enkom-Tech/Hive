@@ -1,0 +1,26 @@
+# Edit metaurl before apply; access-key/secret-key feed RustFS from the same juicefs-secret.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-sc
+provisioner: csi.juicefs.com
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: hive-storage
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: juicefs-secret
+  namespace: hive-storage
+stringData:
+  name: hive-fs
+  # Replace with your Redis/Dragonfly metadata URL (must include password if required).
+  metaurl: "redis://:REPLACE_ME@redis.external.svc.cluster.local:6379/1"
+  storage: "s3"
+  bucket: "http://rustfs.hive-storage.svc.cluster.local:9000/hive-juicefs"
+  access-key: "rustfsadmin"
+  secret-key: "rustfsadmin"

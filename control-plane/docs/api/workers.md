@@ -203,22 +203,55 @@ After provision **`hello`** and on a periodic timer ( **`HIVE_WORKER_AUTOMATION_
 
 See [`infra/worker/auto-deploy/README.md`](../../../infra/worker/auto-deploy/README.md).
 
-## Worker tool bridge (agent)
+## Worker API (drone)
 
-Narrow HTTP surface for **`hive-worker`** (or adapters) to invoke a **small allowlisted** set of control-plane actions using the same **agent** credentials as the rest of the API (`Authorization: Bearer` agent API key or agent JWT).
+Narrow HTTP surface for **`hive-worker`** only: **`Authorization: Bearer`** must be a **worker-instance JWT** (claim `kind: worker_instance`), minted by the control plane and sent on the WebSocket as **`worker_api_token`**. Requires **`HIVE_WORKER_JWT_SECRET`** on the server.
+
+- **Principal:** **`worker_instance` only** (board and agent tokens get **`403`**). This is **not** the same principal type as a board **user** session or **agent** API key; do not assume board RBAC maps 1:1 onto these routes.
+- **`agentId`** in the JSON body or query is validated: the agent must belong to the JWT’s company.
+- **Not tool-level RBAC:** Each endpoint enforces concrete rules (company, assignee, checkout/`X-Hive-Run-Id`, agent status)—see implementation in [`../../server/src/routes/worker-api.ts`](../../server/src/routes/worker-api.ts). There is no separate permission table per MCP tool name on the control plane; indexer-facing tools are gated by the **HTTP MCP gateway** (token + blocked tools).
 
 ```
-POST /api/worker-tools/bridge
-Content-Type: application/json
-
-{ "action": "cost.report", "input": { ... } }
+POST /api/worker-api/cost-report
+POST /api/worker-api/issues                        — body: same as board issue create + required agentId (MCP: issue.create)
+PATCH /api/worker-api/issues/{issueId}           — body: patch allowlist + agentId; no status (use transition); MCP: issue.update
+POST /api/worker-api/agent-hires                 — body: board hire/create-agent shape + agentId (MCP: agent.requestHire)
+POST /api/worker-api/issues/{issueId}/comments   — body: { "agentId", "body" }
+POST /api/worker-api/issues/{issueId}/transition — body: { "agentId", "status" }
+GET  /api/worker-api/issues/{issueId}?agentId=<uuid>
 ```
 
-- **`HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS`** — comma-separated action ids on the **server**. If empty or unset, the endpoint responds **`503`** (bridge disabled).
-- **Principal:** **`agent` only** (board users get **`403`**).
-- **Actions** (when allowlisted): `cost.report` (body matches [cost event create](./costs.md) fields; `agentId` is forced from the token), `issue.appendComment` (`input.issueId`, `input.body`; enforces checkout/run ownership the same way as issue comments when the issue is `in_progress` for that agent), `issue.transitionStatus` (`input.issueId`, `input.status`; **assignee must be the calling agent**; same checkout/run rule when the issue is `in_progress` for that agent), `issue.get` (`input.issueId` — UUID or identifier; read-only summary for issues in the agent’s company).
+`cost-report` body matches [cost event create](./costs.md) fields (with required **`agentId`**). **`X-Hive-Run-Id`** header is required for checked-out **`in_progress`** issue mutations (same rules as board issue APIs).
 
-**200** `{ "ok": true, "result": { ... } }`. Errors use standard HTTP status codes. Successful calls emit activity **`worker.tool_bridge`** (action id in details; no comment bodies).
+**201** / **200** `{ "ok": true, "result": { ... } }`. Activity actions use the **`worker_api.*`** prefix.
+
+Agent-facing tools use **`hive-worker mcp`** (stdio MCP) which proxies to these routes; see [mcp-worker-bridge.md](../guides/agent-developer/mcp-worker-bridge.md) (worker-mediated MCP).
+
+### MCP capability matrix (stdio `hive` server)
+
+| MCP tool | Maps to |
+|----------|---------|
+| `cost.report` | `POST /api/worker-api/cost-report` |
+| `issue.appendComment` | `POST /api/worker-api/issues/{issueId}/comments` |
+| `issue.transitionStatus` | `POST /api/worker-api/issues/{issueId}/transition` |
+| `issue.get` | `GET /api/worker-api/issues/{issueId}?agentId=` |
+| `issue.create` | `POST /api/worker-api/issues` |
+| `issue.update` | `PATCH /api/worker-api/issues/{issueId}` |
+| `agent.requestHire` | `POST /api/worker-api/agent-hires` |
+| `code.search` / `code.indexStats` | Worker HTTP call to **`HIVE_MCP_CODE_URL`** (gateway → CocoIndex MCP); not control-plane HTTP |
+| `documents.search` / `documents.indexStats` | Worker HTTP call to **`HIVE_MCP_DOCS_URL`** (gateway → DocIndex MCP) |
+| Dynamic WASM tools | In-process wazero under `skills/` |
+
+**Deferred:** **request_deploy** / supply-chain deploy of other agents or images from the worker surface—see [DRONE-SPEC.md](../../doc/DRONE-SPEC.md) §7 (*Deferred MCP-shaped capabilities*).
+
+### HiveWorkerPool MCP wiring (Kubernetes operator)
+
+`HiveWorkerPool.status.conditions` may include:
+
+- **`MCPCodeGateway`** — **`True`** / reason **`Wired`** when `HIVE_MCP_CODE_*` is injected; **`False`** / **`GatewayIncomplete`** when a selected indexer is **Ready** but gateway URL or secret is missing; **`Unknown`** while waiting for a ready indexer or when no `HiveIndexer` exists for the company.
+- **`MCPDocsGateway`** — same pattern for document search / `HIVE_MCP_DOCS_*`.
+
+When several indexers match the company, set **`spec.codeIndexerName`** / **`spec.docIndexerName`** (resource `metadata.name`) on the pool; otherwise the operator chooses the **lexicographically smallest** name among **Ready** indexers that have a complete gateway.
 
 ### Multi-instance / load balancing
 

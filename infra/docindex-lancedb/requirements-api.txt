@@ -1,0 +1,2 @@
+# Deprecated as a duplicate manifest — use requirements.txt (Dependabot + pip-compile).
+-r requirements.txt

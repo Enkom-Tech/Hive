@@ -1,0 +1,28 @@
+# cert-manager scaffolding for DragonflyDB TLS in the docindex namespace.
+# Prerequisites: cert-manager installed in the cluster.
+# Phase 3 will migrate to a trust-bundle issuer with rotation managed by the operator.
+
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: docindex-selfsigned
+  namespace: docindex
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: docindex-queue-tls
+  namespace: docindex
+spec:
+  secretName: docindex-queue-tls
+  duration: 8760h   # 1 year; rotate in Phase 3 via operator
+  renewBefore: 720h # 30 days
+  issuerRef:
+    name: docindex-selfsigned
+    kind: Issuer
+  dnsNames:
+    - docindex-dragonfly
+    - docindex-dragonfly.docindex.svc.cluster.local

@@ -33,3 +33,30 @@ updates:
     open-pull-requests-limit: 3
     labels:
       - "dependencies"
+
+  # Python: CocoIndex — Dependabot updates requirements.txt; re-run pip-compile after merges.
+  - package-ecosystem: "pip"
+    directory: "/infra/cocoindex-lancedb"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # DocIndex API — requirements.txt is the manifest (hash lock: requirements-api.lock).
+  - package-ecosystem: "pip"
+    directory: "/infra/docindex-lancedb"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # DocIndex parser worker — worker/requirements.txt + worker/requirements.lock.
+  - package-ecosystem: "pip"
+    directory: "/infra/docindex-lancedb/worker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"

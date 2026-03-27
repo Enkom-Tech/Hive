@@ -37,4 +37,13 @@ func TestMetrics_ReturnsPrometheusFormat(t *testing.T) {
 	if !regexp.MustCompile(`hive_errors_total \d+`).MatchString(body) {
 		t.Errorf("missing hive_errors_total: %s", body)
 	}
+	for _, name := range []string{
+		`hive_mcp_indexer_calls_total\{gateway="code",result="ok"\}`,
+		`hive_mcp_indexer_circuit_open\{gateway="code"\}`,
+		`hive_wasm_skill_calls_total\{result="ok"\}`,
+	} {
+		if !regexp.MustCompile(name + ` \d+`).MatchString(body) {
+			t.Errorf("missing metric line %s in body", name)
+		}
+	}
 }

@@ -1,0 +1,35 @@
+# Voluntary disruption during node drains/upgrades. maxUnavailable: 1 is safe for single-replica
+# StatefulSets (one pod may be evicted at a time). For multi-replica in-cluster stores, switch to
+# minAvailable tuned to your quorum (and only after enabling real replication in the product).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dragonfly
+  namespace: hive-storage
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dragonfly
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rustfs
+  namespace: hive-storage
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: rustfs
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minio
+  namespace: hive-storage
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: minio

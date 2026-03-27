@@ -1,9 +1,14 @@
 import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { hiveDeployments } from "./hive_deployments.js";
 
 export const companies = pgTable(
   "companies",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Deployment row for shared operator-scoped config (see `hive_deployments`). */
+    deploymentId: uuid("deployment_id")
+      .notNull()
+      .references(() => hiveDeployments.id),
     name: text("name").notNull(),
     description: text("description"),
     /** Free text injected into production agent runs (with project/dept sections). */

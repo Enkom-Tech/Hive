@@ -42,9 +42,12 @@ import { departmentRoutes } from "./routes/departments.js";
 import { createCompanyEventsSSEHandler } from "./routes/events-sse.js";
 import { releaseRoutes } from "./routes/releases.js";
 import { workerDownloadsRoutes } from "./routes/worker-downloads.js";
-import { workerToolRoutes } from "./routes/worker-tools.js";
+import { workerApiRoutes } from "./routes/worker-api.js";
+import { internalHiveRoutes } from "./routes/internal-hive.js";
+import { e2eMcpSmokeRoutes } from "./routes/e2e-mcp-smoke.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { initPlacementPrometheus, renderPlacementPrometheusScrape } from "./placement-metrics.js";
+import { workerApiMetricsMiddleware } from "./middleware/worker-api-metrics.js";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 
 type UiMode = "none" | "static" | "vite-dev";
@@ -95,7 +98,16 @@ export async function createApp(
     workerProvisionManifestJson?: string;
     workerProvisionManifestFile?: string;
     workerProvisionManifestSigningKeyPem?: string;
-    workerToolBridgeAllowedActions?: string[];
+    /** Enables POST /api/internal/hive/inference-metering (router → ledger). */
+    internalHiveOperatorSecret?: string;
+    /**
+     * When set with deploymentMode local_trusted, enables POST /api/e2e/mcp-smoke/materialize
+     * (X-Hive-E2E-MCP-Secret) for Playwright MCP → worker-api smoke only.
+     */
+    e2eMcpSmokeMaterializeSecret?: string;
+    /** When set with token, deployment `model_gateway_backend=bifrost` can mint sk-bf-* via Bifrost governance API. */
+    bifrostAdminBaseUrl?: string;
+    bifrostAdminToken?: string;
     authPublicBaseUrl?: string;
     /** Disables self-service sign-up (Better Auth + gate); authenticated mode only. */
     authDisableSignUp: boolean;
@@ -177,7 +189,7 @@ export async function createApp(
       /^\/companies\/[^/]+\/worker-instances\/[^/]+$/.test(path) ||
       /^\/companies\/[^/]+\/worker-instances\/agents\//.test(path) ||
       /^\/companies\/[^/]+\/agents\/[^/]+\/worker-pool\/rotate/.test(path) ||
-      /^\/worker-tools\/bridge/.test(path) ||
+      /^\/worker-api\//.test(path) ||
       /^\/worker-downloads\/provision-manifest/.test(path) ||
       /^\/companies\/[^/]+\/worker-runtime\/manifest$/.test(path) ||
       /^\/worker-pairing\//.test(path) ||
@@ -273,9 +285,28 @@ export async function createApp(
     }),
   );
   api.use(
-    "/worker-tools",
-    workerToolRoutes(db, { allowedActions: opts.workerToolBridgeAllowedActions ?? [] }),
+    "/worker-api",
+    workerApiMetricsMiddleware(),
+    workerApiRoutes(db, { secretsStrictMode: opts.secretsStrictMode }),
   );
+  if (opts.internalHiveOperatorSecret?.trim()) {
+    api.use(
+      "/internal/hive",
+      internalHiveRoutes(db, { operatorSecret: opts.internalHiveOperatorSecret.trim() }),
+    );
+  }
+  if (
+    opts.deploymentMode === "local_trusted" &&
+    opts.e2eMcpSmokeMaterializeSecret?.trim()
+  ) {
+    api.use(
+      "/e2e/mcp-smoke",
+      e2eMcpSmokeRoutes(db, {
+        materializeSecret: opts.e2eMcpSmokeMaterializeSecret.trim(),
+        serverPort: opts.serverPort,
+      }),
+    );
+  }
   api.get(
     "/companies/:companyId/events",
     createCompanyEventsSSEHandler(db, {
@@ -292,6 +323,10 @@ export async function createApp(
       workerProvisionManifestJson: opts.workerProvisionManifestJson,
       workerProvisionManifestFile: opts.workerProvisionManifestFile,
       workerProvisionManifestSigningKeyPem: opts.workerProvisionManifestSigningKeyPem,
+      bifrostAdmin:
+        opts.bifrostAdminBaseUrl?.trim() && opts.bifrostAdminToken?.trim()
+          ? { baseUrl: opts.bifrostAdminBaseUrl.trim(), token: opts.bifrostAdminToken.trim() }
+          : undefined,
     }),
   );
   api.use(agentRoutes(db, { strictSecretsMode: opts.secretsStrictMode }));

@@ -16,9 +16,13 @@ def chunker():
 
 
 class TestChunkFile:
-    def test_empty_file_produces_no_chunks(self, chunker):
+    def test_empty_file_produces_single_empty_chunk(self, chunker):
+        """Line-based chunker treats '' as one empty line → one chunk (chunk_end 1)."""
         chunks = chunker.chunk_file("src/empty.py", "", "my-repo")
-        assert chunks == []
+        assert len(chunks) == 1
+        assert chunks[0].content == ""
+        assert chunks[0].chunk_start == 0
+        assert chunks[0].chunk_end == 1
 
     def test_single_line_file_produces_one_chunk(self, chunker):
         content = "x = 1"

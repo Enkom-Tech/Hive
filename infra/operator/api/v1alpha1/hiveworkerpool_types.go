@@ -38,10 +38,26 @@ type HiveWorkerPoolSpec struct {
 	// +optional
 	AdapterConfig map[string]string `json:"adapterConfig,omitempty"`
 
-	// ModelGatewayURL is the OpenAI-compatible base URL for LLM inference (e.g. model gateway).
-	// When set, the worker receives HIVE_MODEL_GATEWAY_URL so agents use this endpoint.
+	// ModelGatewayURL is the OpenAI-compatible base URL for LLM inference (e.g. hive-model-gateway-go or Bifrost).
+	// When set, the worker receives HIVE_MODEL_GATEWAY_URL so agents use this endpoint (must include /v1).
+	// OpenAI-compatible clients also receive OPENAI_BASE_URL from this value when unset (see hive-worker executor).
 	// +optional
 	ModelGatewayURL string `json:"modelGatewayURL,omitempty"`
+
+	// ModelGatewayCredentialSecret references a key in a tenant-namespace Secret for OPENAI_API_KEY (e.g. Bifrost sk-bf-*).
+	// The Secret must exist in the same namespace as the worker pool; the control plane or a sync job should populate it — never put raw tokens in this CRD.
+	// +optional
+	ModelGatewayCredentialSecret *corev1.SecretKeySelector `json:"modelGatewayCredentialSecret,omitempty"`
+
+	// CodeIndexerName is the metadata.name of the HiveIndexer to use for HIVE_MCP_CODE_* when multiple indexers exist for the company.
+	// If empty, the operator selects the lexicographically first ready HiveIndexer that has a gateway URL and secret.
+	// +optional
+	CodeIndexerName string `json:"codeIndexerName,omitempty"`
+
+	// DocIndexerName is the metadata.name of the HiveDocIndexer to use for HIVE_MCP_DOCS_* when multiple document indexers exist for the company.
+	// If empty, the operator selects the lexicographically first ready HiveDocIndexer that has a gateway URL and secret.
+	// +optional
+	DocIndexerName string `json:"docIndexerName,omitempty"`
 }
 
 // HiveWorkerPoolStatus defines the observed state of HiveWorkerPool.

@@ -1,3 +1,4 @@
+import { DEFAULT_HIVE_DEPLOYMENT_ID } from "@hive/shared";
 import { createDb } from "./client.js";
 import { companies, agents, goals, projects, issues } from "./schema/index.js";
 
@@ -11,6 +12,7 @@ console.log("Seeding database...");
 const [company] = await db
   .insert(companies)
   .values({
+    deploymentId: DEFAULT_HIVE_DEPLOYMENT_ID,
     name: "Hive Demo Co",
     description: "A demo autonomous company",
     status: "active",

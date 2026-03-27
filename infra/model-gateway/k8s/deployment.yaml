@@ -16,7 +16,8 @@ spec:
     spec:
       containers:
         - name: gateway
-          image: model-gateway:latest
+          # Prefer Go router: docker build -f infra/model-gateway-go/Dockerfile -t hive-model-gateway-go:latest infra/model-gateway-go
+          image: hive-model-gateway-go:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: CONFIG_PATH

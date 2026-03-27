@@ -1,0 +1,40 @@
+# Additional NetworkPolicy: allow Bifrost pods to reach the Hive board API (metering plugin + internal lookup).
+# Apply alongside networkpolicy.yaml. Multiple policies for the same podSelector combine (union of allowed traffic).
+#
+# Customize:
+# - namespaceSelector / podSelector to match your control-plane namespace and board Deployment labels
+# - port: 443 if the in-cluster Service is TLS; 3100 or 8080 for plain HTTP Service ports
+#
+# Apply: kubectl apply -n hive-llm -f infra/model-gateway/bifrost/networkpolicy-board-egress.example.yaml
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bifrost-egress-hive-board
+  labels:
+    app.kubernetes.io/name: bifrost
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bifrost
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: hive-control-plane
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: hive-board
+      ports:
+        - protocol: TCP
+          port: 3100
+    # Uncomment if board listens on HTTPS inside the mesh
+    # - to:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: hive-control-plane
+    #   ports:
+    #     - protocol: TCP
+    #       port: 443

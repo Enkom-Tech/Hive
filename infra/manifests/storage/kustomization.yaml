@@ -1,0 +1,12 @@
+# Default stack: Dragonfly (metadata) + RustFS (object) + JuiceFS StorageClass + PDBs.
+# Alternatives: overlays/object-minio, meta-external, object-external-s3, fully-external (HA backends).
+# JuiceFS CSI driver: install via Helm (see juicefs-csi.yaml comments); not applied here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hive-storage
+resources:
+  - namespace.yaml
+  - dragonfly.yaml
+  - juicefs-storageclass.yaml
+  - rustfs.yaml
+  - poddisruptionbudgets.yaml

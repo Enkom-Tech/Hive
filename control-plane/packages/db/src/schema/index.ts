@@ -1,3 +1,6 @@
+export { hiveDeployments } from "./hive_deployments.js";
+export { inferenceModels } from "./inference_models.js";
+export { gatewayVirtualKeys } from "./gateway_virtual_keys.js";
 export { companies } from "./companies.js";
 export { authUsers, authSessions, authAccounts, authVerifications } from "./auth.js";
 export { instanceUserRoles } from "./instance_user_roles.js";
@@ -44,3 +47,4 @@ export { companySecretVersions } from "./company_secret_versions.js";
 export { webhookDeliveries } from "./webhook_deliveries.js";
 export { intents } from "./intents.js";
 export { intentLinks } from "./intent_links.js";
+export { workerApiIdempotency } from "./worker_api_idempotency.js";

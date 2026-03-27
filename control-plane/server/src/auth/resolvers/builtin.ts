@@ -7,6 +7,7 @@ import type { Principal } from "@hive/shared";
 import type { DeploymentMode } from "@hive/shared";
 import { verifyLocalAgentJwt } from "../../agent-auth-jwt.js";
 import { verifyBoardJwt } from "../board-jwt.js";
+import { verifyWorkerJwt } from "../worker-jwt.js";
 import type { BetterAuthSessionResult } from "../better-auth.js";
 import { logger } from "../../middleware/logger.js";
 import { LOCAL_BOARD_USER_ID } from "../../board-claim.js";
@@ -91,6 +92,17 @@ export async function resolvePrincipalBuiltin(
         company_id: agentClaims.company_id,
         roles: [],
         runId: runIdHeader || agentClaims.run_id,
+      };
+    }
+
+    const workerClaims = verifyWorkerJwt(token);
+    if (workerClaims) {
+      return {
+        type: "worker_instance",
+        id: workerClaims.sub,
+        company_id: workerClaims.company_id,
+        workerInstanceRowId: workerClaims.sub,
+        roles: [],
       };
     }
 

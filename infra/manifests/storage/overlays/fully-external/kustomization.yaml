@@ -1,0 +1,8 @@
+# HA / production-style: no in-cluster RustFS or Dragonfly. Point juicefs-secret at managed
+# Redis-compatible metadata and S3-compatible object storage (edit before apply).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hive-storage
+resources:
+  - namespace.yaml
+  - juicefs-storageclass.yaml

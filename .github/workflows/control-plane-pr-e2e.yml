@@ -41,11 +41,24 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: infra/worker/go.mod
+          cache-dependency-path: infra/worker/go.sum
+
+      - name: Build hive-worker (MCP E2E smoke)
+        working-directory: infra/worker
+        run: go build -o hive-worker .
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run E2E (onboarding)
-        run: pnpm run test:e2e:onboarding
+      - name: Run E2E
+        env:
+          HIVE_E2E_HIVE_WORKER_BINARY: ${{ github.workspace }}/infra/worker/hive-worker
+          HIVE_WORKER_JWT_SECRET: hive-e2e-worker-jwt-secret-at-least-32-chars!!
+          HIVE_E2E_MCP_MATERIALIZE_SECRET: hive-e2e-mcp-materialize-secret
+        run: pnpm run test:e2e
 
       - name: Upload Playwright report
         if: always()

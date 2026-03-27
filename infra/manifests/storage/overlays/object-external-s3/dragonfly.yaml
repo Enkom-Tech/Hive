@@ -1,0 +1,55 @@
+# SYNC: ../../dragonfly.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dragonfly-auth
+  namespace: hive-storage
+type: Opaque
+stringData:
+  password: changeme-dragonfly
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dragonfly
+  namespace: hive-storage
+spec:
+  serviceName: dragonfly
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dragonfly
+  template:
+    metadata:
+      labels:
+        app: dragonfly
+    spec:
+      containers:
+        - name: dragonfly
+          image: ghcr.io/dragonflydb/dragonfly:v1.27.1
+          env:
+            - name: DFLY_requirepass
+              valueFrom:
+                secretKeyRef:
+                  name: dragonfly-auth
+                  key: password
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "512Mi"
+            limits:
+              memory: "2Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dragonfly
+  namespace: hive-storage
+spec:
+  selector:
+    app: dragonfly
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis

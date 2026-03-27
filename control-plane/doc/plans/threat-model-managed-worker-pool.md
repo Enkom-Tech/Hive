@@ -101,6 +101,20 @@ Full operator steps: [security-runbook.md](../../docs/deploy/security-runbook.md
 
 Database migrations are forward-only; orphaned rows may need a documented admin script after rollback.
 
+## MCP, worker-api, RAG, and indexer gateways
+
+This lane is **orthogonal** to pool placement: the same drone may expose **stdio MCP** to agents while holding a **worker-instance JWT** for `POST/GET /api/worker-api/*` and **gateway bearer tokens** for HTTP MCP to CocoIndex/DocIndex.
+
+**Spec note:** Issue **create**, **patch** (excluding status transitions), and **agent hire** are implemented on **`/api/worker-api/*`** with board-parity checks; **`request_deploy`** remains deferred in [DRONE-SPEC.md §7](../DRONE-SPEC.md). Any process holding **`worker-jwt`** can drive those calls for agents in the JWT’s company — see JWT row below. Mass issue creation or hire spam is constrained by the same **permission** and **sensitive** rate-limit buckets as other worker-api routes. For **401/403** on `/api/worker-api/*` and indexer correlation, use [security-runbook — Alerts: worker MCP and indexers](../../docs/deploy/security-runbook.md).
+
+| Topic | Trust boundary | Risk | Mitigation |
+| --- | --- | --- | --- |
+| **Worker JWT** | Any process with `worker-jwt` can call worker-api for the JWT’s `company_id` and may name any **`agentId`** in the body that belongs to that company | Stolen file on host, or hostile code in the drone process | Short **TTL** (`HIVE_WORKER_JWT_TTL_*`); protect `HIVE_WORKER_STATE_DIR`; treat drone as single-tenant for that company; rotate **secret** with coordinated API + worker rollout ([security-runbook](../../docs/deploy/security-runbook.md)) |
+| **Gateway tokens** (`HIVE_MCP_CODE_*`, `HIVE_MCP_DOCS_*`) | Pod env / Secret; not injected into agent containers by default | Wrong URL → confused deputy across tenants; leaked token → indexer abuse | Operator wiring + **`MCPCodeGateway` / `MCPDocsGateway`** conditions on `HiveWorkerPool`; network policies; rotate gateway Secret with indexer redeploy |
+| **RAG / search results** | Content returned to the model | **Prompt injection**, exfil of secrets from indexed repos/docs | **`HIVE_MCP_INDEXER_MAX_TEXT_BYTES`** cap; gateway **blocklists**; org process (review snippets, model policy) — not fully solvable in code alone |
+| **WASM `skills/`** | Operator-written modules under cache dir | Malicious wasm burns CPU until timeout; not a strong sandbox | **Operator-only** write path; caps (`HIVE_WASM_*`); prefer signed/provisioned bundles |
+| **Stdio MCP** | Single process | Long **code.search** blocks other tools when `HIVE_MCP_MAX_CONCURRENT=1`; **N>1** raises CPU/memory exposure on the worker host | Default sequential; bounded concurrency (see [DRONE-SPEC.md](../DRONE-SPEC.md) §7); WASM serialized when N>1 |
+
 ## Residual risks
 
 - **Compromised drone process:** Can attempt to run work for any `agentId` the server sends; mitigations are server allow-list + worker checks + short-lived credentials — not full VM isolation.

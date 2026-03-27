@@ -17,10 +17,10 @@ metadata:
   name: hive-operator
 rules:
   - apiGroups: ["hive.io"]
-    resources: ["hiveclusters", "hivecompanies", "hiveworkerpools"]
+    resources: ["hiveclusters", "hivecompanies", "hiveworkerpools", "hiveindexers", "hivedocindexers"]
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["hive.io"]
-    resources: ["hiveclusters/status", "hivecompanies/status", "hiveworkerpools/status"]
+    resources: ["hiveclusters/status", "hivecompanies/status", "hiveworkerpools/status", "hiveindexers/status", "hivedocindexers/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: [""]
     resources: ["namespaces", "secrets", "services", "persistentvolumeclaims", "resourcequotas"]

@@ -11,15 +11,18 @@ export interface CostDateRange {
 export function costService(db: Db) {
   return {
     createEvent: async (companyId: string, data: Omit<typeof costEvents.$inferInsert, "companyId">) => {
-      const agent = await db
-        .select()
-        .from(agents)
-        .where(eq(agents.id, data.agentId))
-        .then((rows) => rows[0] ?? null);
+      const agentRowId = data.agentId;
+      if (agentRowId) {
+        const agent = await db
+          .select()
+          .from(agents)
+          .where(eq(agents.id, agentRowId))
+          .then((rows) => rows[0] ?? null);
 
-      if (!agent) throw notFound("Agent not found");
-      if (agent.companyId !== companyId) {
-        throw unprocessable("Agent does not belong to company");
+        if (!agent) throw notFound("Agent not found");
+        if (agent.companyId !== companyId) {
+          throw unprocessable("Agent does not belong to company");
+        }
       }
 
       const event = await db
@@ -28,13 +31,15 @@ export function costService(db: Db) {
         .returning()
         .then((rows) => rows[0]);
 
-      await db
-        .update(agents)
-        .set({
-          spentMonthlyCents: sql`${agents.spentMonthlyCents} + ${event.costCents}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(agents.id, event.agentId));
+      if (event.agentId) {
+        await db
+          .update(agents)
+          .set({
+            spentMonthlyCents: sql`${agents.spentMonthlyCents} + ${event.costCents}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(agents.id, event.agentId));
+      }
 
       await db
         .update(companies)
@@ -44,23 +49,25 @@ export function costService(db: Db) {
         })
         .where(eq(companies.id, companyId));
 
-      const updatedAgent = await db
-        .select()
-        .from(agents)
-        .where(eq(agents.id, event.agentId))
-        .then((rows) => rows[0] ?? null);
+      if (event.agentId) {
+        const updatedAgent = await db
+          .select()
+          .from(agents)
+          .where(eq(agents.id, event.agentId))
+          .then((rows) => rows[0] ?? null);
 
-      if (
-        updatedAgent &&
-        updatedAgent.budgetMonthlyCents > 0 &&
-        updatedAgent.spentMonthlyCents >= updatedAgent.budgetMonthlyCents &&
-        updatedAgent.status !== "paused" &&
-        updatedAgent.status !== "terminated"
-      ) {
-        await db
-          .update(agents)
-          .set({ status: "paused", updatedAt: new Date() })
-          .where(eq(agents.id, updatedAgent.id));
+        if (
+          updatedAgent &&
+          updatedAgent.budgetMonthlyCents > 0 &&
+          updatedAgent.spentMonthlyCents >= updatedAgent.budgetMonthlyCents &&
+          updatedAgent.status !== "paused" &&
+          updatedAgent.status !== "terminated"
+        ) {
+          await db
+            .update(agents)
+            .set({ status: "paused", updatedAt: new Date() })
+            .where(eq(agents.id, updatedAgent.id));
+        }
       }
 
       return event;

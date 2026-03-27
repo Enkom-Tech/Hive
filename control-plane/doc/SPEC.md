@@ -330,7 +330,7 @@ This skill is adapter-agnostic — it can be loaded into Claude Code, injected i
 
 ### Deployment Model
 
-**Single-tenant, self-hostable.** Not a SaaS. One instance = one operator's companies.
+**Single-tenant, self-hostable.** Not a SaaS: you operate Hive for yourself or your organization.
 
 #### Development Path (Progressive Deployment)
 

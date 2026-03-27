@@ -54,3 +54,9 @@ Use `depends_on: { provisioner: { condition: service_completed_successfully } }`
 ## Signed manifests
 
 When the control plane is configured with **`HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY_FILE`** (or inline key), manifest HTTP responses include **`X-Hive-Manifest-Signature`**. Workers that set **`HIVE_PROVISION_MANIFEST_PUBLIC_KEY`** verify the signature before trusting manifest content. See [security runbook](../../control-plane/docs/deploy/security-runbook.md#provision-manifest-signing-optional-ed25519).
+
+## MCP WASM skills (`skills/*.wasm`)
+
+Optional tools under **`HIVE_PROVISION_CACHE_DIR/skills/`** (each `*.wasm` plus a sibling **`*.schema.json`**) run **inside the hive-worker process** via wazero when exposed through **`hive-worker mcp`**.
+
+**Trust boundary:** Treat this directory as **operator-controlled** only. Do not allow untrusted users to drop WASM into the cache volume. A malicious module can still consume CPU until **`HIVE_WASM_SKILL_TIMEOUT_MS`** (default 30s) and is constrained by **memory pages** and **stdout size** (see [environment variables](../../control-plane/docs/deploy/environment-variables.md)); prefer signed manifests and read-only mounts for production.

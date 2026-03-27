@@ -33,6 +33,8 @@ Hive supports **lights-out** operation: fully autonomous agentic companies that 
 
 Hive is a Node.js server and React UI that orchestrates a team of AI agents to run a business. Bring your own agents, assign goals, and track your agents' work and costs from one dashboard.
 
+**You run it:** Hive is **self-hosted** — deploy and operate it on **your** infrastructure (or your organization’s). For the product model, see [doc/SPEC.md](doc/SPEC.md).
+
 It looks like a task manager — but under the hood it has org charts, budgets, governance, goal alignment, and agent coordination.
 
 **Manage business goals, not pull requests.**

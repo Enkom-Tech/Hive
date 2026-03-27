@@ -1,0 +1,296 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: hiveindexers.hive.io
+spec:
+  group: hive.io
+  names:
+    kind: HiveIndexer
+    listKind: HiveIndexerList
+    plural: hiveindexers
+    singular: hiveindexer
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.companyRef
+      name: Company
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .status.totalChunks
+      name: Chunks
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          HiveIndexer manages a CocoIndex semantic code indexing service for a HiveCompany tenant.
+          Each HiveIndexer is scoped to one company and deployed in its tenant namespace,
+          providing data isolation between tenants.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: HiveIndexerSpec defines the desired state of HiveIndexer.
+            properties:
+              companyRef:
+                description: |-
+                  CompanyRef is the name of the HiveCompany CR this indexer serves.
+                  The indexer is deployed in the company's tenant namespace (hive-tenant-<companyID>).
+                type: string
+              dragonflySecretRef:
+                description: |-
+                  DragonflySecretRef is the name of a K8s Secret that contains the DragonflyDB
+                  password under key "password". If empty, DragonflyDB auth is not configured.
+                type: string
+              dragonflyUrl:
+                description: |-
+                  DragonflyURL is the DragonflyDB connection URL template.
+                  The password placeholder is replaced at runtime from DragonflySecretRef.
+                  Example: redis://dragonfly.hive-storage.svc.cluster.local:6379/0
+                type: string
+              embeddingDim:
+                default: 4096
+                description: |-
+                  EmbeddingDim is the vector dimension produced by the embedding model.
+                  Must match the model loaded in the llama.cpp server (default: 4096 for Qwen3-Embedding-8B).
+                format: int32
+                minimum: 1
+                type: integer
+              embeddingUrl:
+                description: |-
+                  EmbeddingURL is the llama.cpp embedding server URL (cluster-internal service).
+                  Example: http://llama-embeddings.cocoindex.svc.cluster.local:8080
+                type: string
+              gatewayImage:
+                description: |-
+                  GatewayImage is the container image for the MCP gateway service.
+                  The gateway is a lightweight proxy that validates worker tokens and
+                  forwards approved calls to the indexer. If empty, no gateway is deployed
+                  and worker injection is skipped.
+                type: string
+              indexerImage:
+                description: IndexerImage is the container image for the CocoIndex
+                  service.
+                type: string
+              languages:
+                description: |-
+                  Languages is the comma-separated list of programming languages to index.
+                  Supported: python, go, typescript, javascript, rust, java
+                items:
+                  type: string
+                type: array
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: NodeSelector for the indexer Deployment.
+                type: object
+              resources:
+                description: |-
+                  Resources defines CPU/memory requests and limits for the indexer container.
+                  Defaults: requests: {cpu: 1, memory: 4Gi}, limits: {cpu: 4, memory: 8Gi}
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              storageClass:
+                description: |-
+                  StorageClass is the storage class for the LanceDB PVC.
+                  Should be a fast local storage class (e.g. local-path, juicefs).
+                type: string
+              storageSize:
+                default: 20Gi
+                description: StorageSize is the PVC size for the LanceDB vector database.
+                type: string
+              tokenSecretRef:
+                description: |-
+                  TokenSecretRef is the name of a K8s Secret in the same namespace that
+                  contains the CocoIndex API token under key "token".
+                  This token is injected as COCOINDEX_API_TOKEN into the indexer pod.
+                  If empty, the operator generates a random token and creates the Secret.
+                type: string
+            required:
+            - companyRef
+            - embeddingDim
+            - embeddingUrl
+            - indexerImage
+            - storageClass
+            - storageSize
+            type: object
+          status:
+            description: HiveIndexerStatus defines the observed state of HiveIndexer.
+            properties:
+              conditions:
+                description: |-
+                  Conditions represent the latest available observations of the indexer's state.
+                  Type IndexerDegraded: True when the indexer Deployment or (if configured) MCP gateway Deployment has no ready replicas.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              gatewaySecretName:
+                description: |-
+                  GatewaySecretName is the name of the Secret holding the worker-tier MCP token.
+                  Workers inject this as HIVE_MCP_TOKEN via secretKeyRef.
+                type: string
+              gatewayUrl:
+                description: |-
+                  GatewayURL is the cluster-internal URL for the MCP gateway service.
+                  Workers inject this as HIVE_MCP_URL (points to gateway, not indexer directly).
+                type: string
+              lastSyncAt:
+                description: LastSyncAt is the last time the reconciler successfully
+                  synced the indexer.
+                type: string
+              ready:
+                description: Ready is true when the indexer pod is running and responding
+                  to health checks.
+                type: boolean
+              serviceUrl:
+                description: ServiceURL is the cluster-internal URL for the indexer
+                  API (admin, internal only).
+                type: string
+              tokenSecretName:
+                description: |-
+                  TokenSecretName is the name of the Secret holding the generated API token.
+                  Workers in the same namespace should use this secret to authenticate to the indexer.
+                type: string
+              totalChunks:
+                description: TotalChunks is the last-known count of indexed code chunks
+                  in LanceDB.
+                format: int64
+                type: integer
+            required:
+            - ready
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

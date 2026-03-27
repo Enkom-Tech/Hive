@@ -1,0 +1,144 @@
+# Hive DocIndex — llama.cpp embeddings + slim API + parser worker + Redis queue.
+# Prerequisite: Qwen3-Embedding-8B GGUF under ./models/ (same as CocoIndex).
+#
+# Usage: docker compose up -d
+# APIs: http://localhost:8082/health, /index, /search
+
+version: "3.8"
+
+services:
+  docindex-queue:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.25.4
+    container_name: docindex-queue
+    restart: unless-stopped
+    command: >
+      --logtostderr
+      --requirepass ${DOCINDEX_QUEUE_PASSWORD:?DOCINDEX_QUEUE_PASSWORD must be set}
+    mem_limit: 512m
+    cpus: "0.5"
+    networks:
+      - docindex-net
+
+  llama-embeddings:
+    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    container_name: docindex-llama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./models:/models:ro
+      - llama-cache-doc:/cache
+    command: >
+      --model /models/qwen3-embedding-8b-Q4_K_M.gguf
+      --embedding
+      --ctx-size 32768
+      --pooling-type mean
+      --host 0.0.0.0
+      --port 8080
+      --n-gpu-layers 999
+      --batch-size 512
+      --ubatch-size 512
+      --defrag-thold 0.1
+    mem_limit: 16g
+    cpus: "4.0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - docindex-net
+
+  docindex-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: docindex-worker
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 8g
+    cpus: "4.0"
+    volumes:
+      - ./mydocs:/data/docs:ro
+    environment:
+      - DOCINDEX_DOCS_PATH=/data/docs
+      - DOCINDEX_REDIS_URL=redis://:${DOCINDEX_QUEUE_PASSWORD:?DOCINDEX_QUEUE_PASSWORD must be set}@docindex-queue:6379/0
+      - DOCINDEX_JOB_SIGNING_KEY=${DOCINDEX_JOB_SIGNING_KEY:?DOCINDEX_JOB_SIGNING_KEY must be set}
+      - DOCINDEX_EMBEDDING_URL=http://llama-embeddings:8080
+      - DOCINDEX_EMBEDDING_BATCH_SIZE=32
+      - DOCINDEX_LOG_LEVEL=info
+    depends_on:
+      docindex-queue:
+        condition: service_started
+      llama-embeddings:
+        condition: service_healthy
+    networks:
+      - docindex-net
+
+  docindex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docindex
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 4g
+    cpus: "2.0"
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./mydocs:/data/docs:ro
+      - docindex-lancedb-data:/data/lancedb
+    environment:
+      - HOME=/tmp
+      - DOCINDEX_DOCS_PATH=/data/docs
+      - DOCINDEX_LANCEDB_URI=/data/lancedb
+      - DOCINDEX_EMBEDDING_URL=http://llama-embeddings:8080
+      - DOCINDEX_EMBEDDING_DIM=4096
+      - DOCINDEX_EMBEDDING_BATCH_SIZE=32
+      - DOCINDEX_API_HOST=0.0.0.0
+      - DOCINDEX_API_PORT=8082
+      - DOCINDEX_INDEX_ON_STARTUP=true
+      - DOCINDEX_WATCH_DOCS=true
+      - DOCINDEX_USE_WORKER_QUEUE=true
+      - DOCINDEX_REDIS_URL=redis://:${DOCINDEX_QUEUE_PASSWORD:?DOCINDEX_QUEUE_PASSWORD must be set}@docindex-queue:6379/0
+      - DOCINDEX_JOB_SIGNING_KEY=${DOCINDEX_JOB_SIGNING_KEY:?DOCINDEX_JOB_SIGNING_KEY must be set}
+      - DOCINDEX_LOG_LEVEL=info
+      - DOCINDEX_API_TOKEN=${DOCINDEX_API_TOKEN:?DOCINDEX_API_TOKEN must be set}
+    depends_on:
+      docindex-queue:
+        condition: service_started
+      docindex-worker:
+        condition: service_started
+      llama-embeddings:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    networks:
+      - docindex-net
+
+volumes:
+  llama-cache-doc:
+  docindex-lancedb-data:
+
+networks:
+  docindex-net:
+    driver: bridge

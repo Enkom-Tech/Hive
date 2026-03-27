@@ -6,7 +6,7 @@ Copyright (C) 2025 Enkom.
 
 ## AGPL-3.0 compliance
 
-Hive is open-source infrastructure for Hive worker orchestration (Kubernetes operator, K3s, JuiceFS, DragonflyDB, GitOps). Whether your use or integration triggers AGPL-3.0 obligations is your responsibility.
+Hive is open-source infrastructure for Hive worker orchestration (Kubernetes operator, K3s, JuiceFS, RustFS, DragonflyDB, GitOps). Whether your use or integration triggers AGPL-3.0 obligations is your responsibility.
 
 We recommend consulting legal or licensing advice to ensure your use of this software and any integrated projects complies with their licenses.
 
@@ -26,6 +26,8 @@ Hive orchestrates or references the following upstream projects. They are not pa
 | K3s           | Apache-2.0 | [k3s-io/k3s](https://github.com/k3s-io/k3s) |
 | JuiceFS       | Apache-2.0 | [juicedata/juicefs](https://github.com/juicedata/juicefs) |
 | DragonflyDB   | BSL 1.1    | Converts to Apache-2.0 after the change date; see [Dragonfly license](https://dragonflydb.io/docs/about/license) |
+| RustFS        | Apache-2.0 | [rustfs/rustfs](https://github.com/rustfs/rustfs) |
+| MinIO         | AGPL-3.0   | Optional in-cluster object store via overlay; [minio/minio](https://github.com/minio/minio) |
 
 Check each project’s current license and terms before use. Your deployment must comply with both this repository’s AGPL-3.0 and the licenses of any components you run.
 

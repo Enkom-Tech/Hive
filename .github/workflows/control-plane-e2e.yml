@@ -42,16 +42,33 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: infra/worker/go.mod
+          cache-dependency-path: infra/worker/go.sum
+
+      - name: Build hive-worker (MCP E2E smoke)
+        working-directory: infra/worker
+        run: go build -o hive-worker .
+
       - run: npx playwright install --with-deps chromium
 
       - name: Run e2e tests
         if: github.event_name != 'workflow_dispatch' || inputs.skip_llm
+        env:
+          HIVE_E2E_HIVE_WORKER_BINARY: ${{ github.workspace }}/infra/worker/hive-worker
+          HIVE_WORKER_JWT_SECRET: hive-e2e-worker-jwt-secret-at-least-32-chars!!
+          HIVE_E2E_MCP_MATERIALIZE_SECRET: hive-e2e-mcp-materialize-secret
         run: pnpm run test:e2e
 
       - name: Run e2e tests (with LLM)
         if: github.event_name == 'workflow_dispatch' && !inputs.skip_llm
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          HIVE_E2E_HIVE_WORKER_BINARY: ${{ github.workspace }}/infra/worker/hive-worker
+          HIVE_WORKER_JWT_SECRET: hive-e2e-worker-jwt-secret-at-least-32-chars!!
+          HIVE_E2E_MCP_MATERIALIZE_SECRET: hive-e2e-mcp-materialize-secret
         run: pnpm run test:e2e
 
       - uses: actions/upload-artifact@v4

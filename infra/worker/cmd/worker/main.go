@@ -110,6 +110,13 @@ func main() {
 		cancel()
 	}()
 
+	if len(os.Args) >= 2 && os.Args[1] == "mcp" {
+		if err := runMCPSubcommand(ctx); err != nil {
+			log.Fatalf("hive-worker mcp: %v", err)
+		}
+		return
+	}
+
 	// Optional "link" subcommand: same as default (outbound WebSocket + local HTTP). Common UX: hive-worker link
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] == "link" {

@@ -1,0 +1,33 @@
+# SYNC: ../../poddisruptionbudgets.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dragonfly
+  namespace: hive-storage
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dragonfly
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rustfs
+  namespace: hive-storage
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: rustfs
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minio
+  namespace: hive-storage
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: minio

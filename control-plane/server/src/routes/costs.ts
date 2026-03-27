@@ -17,14 +17,17 @@ export function costRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
 
     const p = getCurrentPrincipal(req);
-    if (p?.type === "agent" && p.id !== req.body.agentId) {
-      res.status(403).json({ error: "Agent can only report its own costs" });
-      return;
+    if (p?.type === "agent") {
+      if (!req.body.agentId || p.id !== req.body.agentId) {
+        res.status(403).json({ error: "Agent can only report its own costs" });
+        return;
+      }
     }
 
+    const { occurredAt, ...rest } = req.body;
     const event = await costs.createEvent(companyId, {
-      ...req.body,
-      occurredAt: new Date(req.body.occurredAt),
+      ...rest,
+      occurredAt: new Date(occurredAt),
     });
 
     const actor = getActorInfo(req);

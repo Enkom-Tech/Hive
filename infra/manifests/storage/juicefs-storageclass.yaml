@@ -1,3 +1,7 @@
+# juicefs-secret is the single source of truth for CSI + in-cluster object store credentials:
+#   access-key / secret-key — consumed by RustFS or MinIO (object-minio) and by JuiceFS CSI.
+# metaurl password MUST match dragonfly-auth when Dragonfly uses requirepass.
+---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -16,8 +20,10 @@ metadata:
   namespace: hive-storage
 stringData:
   name: hive-fs
-  metaurl: "redis://dragonfly.hive-storage.svc.cluster.local:6379/1"
+  # Must match dragonfly-auth password (redis://:password@host:port/db)
+  metaurl: "redis://:changeme-dragonfly@dragonfly.hive-storage.svc.cluster.local:6379/1"
   storage: "s3"
-  bucket: "http://minio.hive-storage.svc.cluster.local:9000/projects"
-  access-key: "minioadmin"
-  secret-key: "minioadmin"
+  # Bucket is created on first use by JuiceFS if the store allows it; path-style endpoint for RustFS.
+  bucket: "http://rustfs.hive-storage.svc.cluster.local:9000/hive-juicefs"
+  access-key: "rustfsadmin"
+  secret-key: "rustfsadmin"

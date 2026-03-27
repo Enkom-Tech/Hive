@@ -15,6 +15,11 @@ export type AgentPrincipalOpts = {
   runId?: string;
 };
 
+export type WorkerInstancePrincipalOpts = {
+  workerInstanceRowId: string;
+  companyId: string;
+};
+
 /** Build a board principal (user or system) for tests. */
 export function principalBoard(opts: BoardPrincipalOpts): Principal {
   if (opts.isSystem) {
@@ -40,6 +45,18 @@ export function principalAgent(opts: AgentPrincipalOpts): Principal {
     company_id: opts.companyId,
     roles: [],
     ...(opts.runId ? { runId: opts.runId } : {}),
+  };
+}
+
+/** Worker-instance principal (drone JWT) for tests. */
+export function principalWorkerInstance(opts: WorkerInstancePrincipalOpts): Principal {
+  const id = opts.workerInstanceRowId;
+  return {
+    type: "worker_instance",
+    id,
+    company_id: opts.companyId,
+    workerInstanceRowId: id,
+    roles: [],
   };
 }
 

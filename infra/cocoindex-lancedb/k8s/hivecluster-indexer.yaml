@@ -23,8 +23,7 @@ spec:
       name: hive-control-plane-token
       key: token
     tls:
-      enabled: false
-      skipVerify: true  # For local dev only
+      enabled: true
   
   # -----------------------------------------------------------------------------
   # Vector Storage: LanceDB
@@ -197,6 +196,13 @@ spec:
         - name: cocoindex-worker
           image: cocoindex/cocoindex:latest
           imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           env:
             - name: COCOINDEX_MODE
               value: "worker"
@@ -217,6 +223,8 @@ spec:
               readOnly: true
             - name: lancedb
               mountPath: /data/lancedb
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: repos
           hostPath:
@@ -225,6 +233,8 @@ spec:
         - name: lancedb
           persistentVolumeClaim:
             claimName: lancedb-pvc
+        - name: tmp
+          emptyDir: {}
 
 ---
 # -----------------------------------------------------------------------------

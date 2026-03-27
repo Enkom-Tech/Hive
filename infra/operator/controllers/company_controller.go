@@ -151,8 +151,11 @@ func (r *HiveCompanyReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				Ports: []netv1.NetworkPolicyPort{{Port: port(9090)}},
 			},
 			{
-				From:  []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "mcp-gateway"}}}},
-				Ports: []netv1.NetworkPolicyPort{{Port: port(8080)}},
+				From: []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "mcp-gateway"}}}},
+				Ports: []netv1.NetworkPolicyPort{
+					{Port: port(8080)},
+					{Port: port(8082)}, // DocIndex API (HiveDocIndexer)
+				},
 			},
 		},
 		Egress: []netv1.NetworkPolicyEgressRule{
@@ -160,7 +163,7 @@ func (r *HiveCompanyReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			{To: []netv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/storage": "true"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(9000)}, {Port: port(6379)}}},
 			{To: []netv1.NetworkPolicyPeer{{IPBlock: &netv1.IPBlock{CIDR: "0.0.0.0/0"}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(443)}, {Port: port(3100)}}},
 			{To: []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "mcp-gateway"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(9090)}}},
-			{To: []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "indexer"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(8080)}}},
+			{To: []netv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"hive.io/role": "indexer"}}}}, Ports: []netv1.NetworkPolicyPort{{Port: port(8080)}, {Port: port(8082)}}},
 		},
 	}
 	np := &netv1.NetworkPolicy{

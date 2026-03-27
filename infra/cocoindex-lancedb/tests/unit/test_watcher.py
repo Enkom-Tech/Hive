@@ -7,7 +7,6 @@ Specifically:
 
 import asyncio
 import threading
-import time
 import unittest.mock as mock
 import pytest
 
@@ -30,6 +29,13 @@ class FakeIndexer:
             self.indexed_files.append(file_path)
 
 
+def _discard_unscheduled_coroutine(coro, _loop):
+    """Simulate scheduling without running: close coroutine to avoid 'never awaited' warnings."""
+    if asyncio.iscoroutine(coro):
+        coro.close()
+    return mock.MagicMock()
+
+
 @pytest.fixture
 def event_loop():
     loop = asyncio.new_event_loop()
@@ -44,7 +50,7 @@ class TestRepoWatcherThreadSafe:
         watcher = RepoWatcher(indexer, event_loop)
 
         with mock.patch("asyncio.run_coroutine_threadsafe") as mock_schedule:
-            mock_schedule.return_value = mock.MagicMock()
+            mock_schedule.side_effect = _discard_unscheduled_coroutine
             event = FakeEvent("src/main.py")
             watcher.on_modified(event)
 
@@ -79,7 +85,7 @@ class TestRepoWatcherThreadSafe:
 
         supported_files = ["src/app.py", "src/lib.ts", "src/main.go", "src/lib.rs"]
         with mock.patch("asyncio.run_coroutine_threadsafe") as mock_schedule:
-            mock_schedule.return_value = mock.MagicMock()
+            mock_schedule.side_effect = _discard_unscheduled_coroutine
             for f in supported_files:
                 watcher.on_modified(FakeEvent(f))
 
@@ -90,7 +96,7 @@ class TestRepoWatcherDebounce:
     @pytest.mark.asyncio
     async def test_debounce_prevents_double_indexing(self):
         """Rapid double-modification of same file triggers only one index call."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         indexer = FakeIndexer()
         watcher = RepoWatcher(indexer, loop)
 
@@ -108,7 +114,7 @@ class TestRepoWatcherDebounce:
     @pytest.mark.asyncio
     async def test_different_files_are_both_indexed(self):
         """Two different files modified together are both indexed."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         indexer = FakeIndexer()
         watcher = RepoWatcher(indexer, loop)
 

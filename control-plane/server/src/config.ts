@@ -100,8 +100,23 @@ export interface Config {
   workerDeliveryBusUrl: string | undefined;
   /** Expose GET /metrics (Prometheus); use behind firewall or disable in untrusted networks. */
   metricsEnabled: boolean;
-  /** Comma-separated allowlist for POST /api/worker-tools/bridge (agent JWT/API key). */
-  workerToolBridgeAllowedActions: string[];
+  /**
+   * HS256 secret for worker-instance JWTs (`/api/worker-api/*`, WebSocket `worker_api_token`).
+   * When unset, worker JWT minting and verification are disabled.
+   */
+  workerJwtSecret: string | undefined;
+  /**
+   * When set, enables POST /api/internal/hive/inference-metering with Bearer auth for router-side ledger writes.
+   */
+  internalHiveOperatorSecret: string | undefined;
+  /**
+   * When set in local_trusted, exposes POST /api/e2e/mcp-smoke/materialize for MCP E2E smoke (non-production).
+   */
+  e2eMcpSmokeMaterializeSecret: string | undefined;
+  /** Bifrost gateway root URL for board-driven virtual key provisioning (optional). */
+  bifrostAdminBaseUrl: string | undefined;
+  /** Bearer for Bifrost governance API (optional). */
+  bifrostAdminToken: string | undefined;
   /** Auth secret (BETTER_AUTH_SECRET or HIVE_AGENT_JWT_SECRET); set when authenticated. */
   authSecret: string | undefined;
   /** Extra trusted origins from BETTER_AUTH_TRUSTED_ORIGINS env. */
@@ -301,10 +316,14 @@ export function loadConfig(): Config {
   const drainAutoEvacuateEnabled = parsed.HIVE_DRAIN_AUTO_EVACUATE_ENABLED === "true";
   const workerDeliveryBusUrl = parsed.HIVE_WORKER_DELIVERY_BUS_URL?.trim() || undefined;
   const metricsEnabled = parsed.HIVE_METRICS_ENABLED === "true";
-  const workerToolBridgeAllowedActions = (parsed.HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const workerJwtSecret = e(parsed, "WORKER_JWT_SECRET")?.trim() || undefined;
+  const internalHiveOperatorSecret =
+    e(parsed, "HIVE_INTERNAL_OPERATOR_SECRET")?.trim()
+    || e(parsed, "INTERNAL_OPERATOR_SECRET")?.trim()
+    || undefined;
+  const e2eMcpSmokeMaterializeSecret = e(parsed, "E2E_MCP_MATERIALIZE_SECRET")?.trim() || undefined;
+  const bifrostAdminBaseUrl = e(parsed, "BIFROST_ADMIN_BASE_URL")?.trim() || undefined;
+  const bifrostAdminToken = e(parsed, "BIFROST_ADMIN_TOKEN")?.trim() || undefined;
 
   const config: Config = {
     deploymentMode,
@@ -373,7 +392,11 @@ export function loadConfig(): Config {
     drainAutoEvacuateEnabled,
     workerDeliveryBusUrl,
     metricsEnabled,
-    workerToolBridgeAllowedActions,
+    workerJwtSecret,
+    internalHiveOperatorSecret,
+    e2eMcpSmokeMaterializeSecret,
+    bifrostAdminBaseUrl,
+    bifrostAdminToken,
     authSecret: undefined,
     authProvider,
     trustedOriginsExtra: (parsed.BETTER_AUTH_TRUSTED_ORIGINS ?? "")

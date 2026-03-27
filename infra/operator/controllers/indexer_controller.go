@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	indexerFinalizer     = "hive.io/indexer-finalizer"
+	indexerFinalizer      = "hive.io/indexer-finalizer"
 	indexerManagedByLabel = "managed-by"
 	indexerManagedByValue = "hive-operator"
 )
@@ -97,7 +97,7 @@ func (r *HiveIndexerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Ensure indexer Deployment (pod label: hive.io/role=indexer)
 	svcURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", indexer.Name, tenantNS)
-	if err := r.ensureDeployment(ctx, indexer, tenantNS, tokenSecretName, pvcName); err != nil {
+	if err := r.ensureDeployment(ctx, indexer, tenantNS, tokenSecretName, pvcName, company.Spec.CompanyID); err != nil {
 		logger.Error(err, "failed to ensure indexer Deployment")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
@@ -136,9 +136,25 @@ func (r *HiveIndexerReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	indexer.Status.LastSyncAt = metav1.Now().Format(time.RFC3339)
 
 	dep := &appsv1.Deployment{}
+	dataPlaneReady := false
 	if err := r.Get(ctx, client.ObjectKey{Namespace: tenantNS, Name: indexer.Name}, dep); err == nil {
-		indexer.Status.Ready = dep.Status.ReadyReplicas > 0
+		dataPlaneReady = dep.Status.ReadyReplicas > 0
+		indexer.Status.Ready = dataPlaneReady
+	} else {
+		indexer.Status.Ready = false
 	}
+
+	gatewayReady := true
+	if indexer.Spec.GatewayImage != "" {
+		gatewayName := indexer.Name + "-gateway"
+		gwDep := &appsv1.Deployment{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: tenantNS, Name: gatewayName}, gwDep); err != nil {
+			gatewayReady = false
+		} else {
+			gatewayReady = gwDep.Status.ReadyReplicas > 0
+		}
+	}
+	applyIndexerDegradedCondition(&indexer.Status.Conditions, dataPlaneReady, indexer.Spec.GatewayImage != "", gatewayReady, indexer.Generation)
 
 	_ = r.Status().Update(ctx, indexer)
 	return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
@@ -260,7 +276,7 @@ func (r *HiveIndexerReconciler) ensureLanceDBPVC(ctx context.Context, indexer *h
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			StorageClassName: &indexer.Spec.StorageClass,
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
@@ -272,13 +288,19 @@ func (r *HiveIndexerReconciler) ensureLanceDBPVC(ctx context.Context, indexer *h
 	return r.Create(ctx, pvc)
 }
 
+// tenantWorkspacePVCName returns the shared workspace claim name for a company.
+// Must match HiveCompany / HiveWorkerPool (workspace-{companyID}), not HiveCompany CR metadata.name.
+func tenantWorkspacePVCName(companyID string) string {
+	return "workspace-" + companyID
+}
+
 // ensureDeployment creates or updates the CocoIndex Deployment.
 // Applies the same SecurityContext policy as HiveWorkerPoolReconciler:
 // nonroot UID 65534, readOnlyRootFilesystem, drop ALL capabilities.
 func (r *HiveIndexerReconciler) ensureDeployment(
 	ctx context.Context,
 	indexer *hivev1alpha1.HiveIndexer,
-	ns, tokenSecretName, pvcName string,
+	ns, tokenSecretName, pvcName, companyID string,
 ) error {
 	replicas := int32(1)
 
@@ -420,7 +442,7 @@ func (r *HiveIndexerReconciler) ensureDeployment(
 							Name: "workspace",
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: "workspace-" + indexer.Spec.CompanyRef,
+									ClaimName: tenantWorkspacePVCName(companyID),
 									ReadOnly:  true,
 								},
 							},

@@ -1,0 +1,25 @@
+# Replace all REPLACE_* values. Use TLS URLs in production.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-sc
+provisioner: csi.juicefs.com
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: hive-storage
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: juicefs-secret
+  namespace: hive-storage
+stringData:
+  name: hive-fs
+  metaurl: "redis://:REPLACE_META_PASSWORD@REPLACE_META_HOST:6379/REPLACE_META_DB"
+  storage: "s3"
+  bucket: "https://REPLACE_S3_ENDPOINT/REPLACE_BUCKET"
+  access-key: "REPLACE_ACCESS_KEY"
+  secret-key: "REPLACE_SECRET_KEY"

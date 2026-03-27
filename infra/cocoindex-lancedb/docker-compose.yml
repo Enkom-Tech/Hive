@@ -12,8 +12,9 @@ services:
     image: ghcr.io/ggerganov/llama.cpp:server-cuda
     container_name: cocoindex-llama
     restart: unless-stopped
+    mem_limit: 16g
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
     volumes:
       - ./models:/models:ro
       - llama-cache:/cache
@@ -53,7 +54,7 @@ services:
     container_name: cocoindex-dragonfly
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - dragonfly-data:/data
     command: --bind=0.0.0.0 --requirepass ${DRAGONFLY_PASSWORD:?DRAGONFLY_PASSWORD must be set}
@@ -75,13 +76,20 @@ services:
       dockerfile: Dockerfile
     container_name: cocoindex
     restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.cache
+    mem_limit: 4g
+    cpus: "2.0"
     ports:
       - "8080:8080"
     volumes:
       - ./myrepo:/data/repos:ro
       - cocoindex-data:/data/lancedb
-      - cocoindex-cache:/app/.cache
     environment:
+      - HOME=/tmp
       # Core indexing config
       - COCOINDEX_REPOS_PATH=/data/repos
       - COCOINDEX_LANCEDB_URI=/data/lancedb
@@ -123,7 +131,6 @@ services:
 volumes:
   lancedb-data:     # LanceDB persistence (embedded in cocoindex)
   llama-cache:      # llama.cpp KV cache
-  cocoindex-cache:  # Tree-sitter grammars
   dragonfly-data:   # Dragonfly persistence
   cocoindex-data:
 

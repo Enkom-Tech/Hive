@@ -1,6 +1,16 @@
-## 6. control-plane config.yaml snippet (LanceDB endpoint)
-# Add this to your Hive control-plane configuration to enable
-# CocoIndex/LanceDB as a searchable source for agents
+## 6. control-plane config.yaml snippet (LanceDB endpoint) — NOT USED BY HIVE TODAY
+#
+# This repository’s TypeScript control plane does not read this file or any
+# equivalent `dataSources.lancedb` / `embeddingProviders` block. There is no
+# code path that loads LanceDB config from YAML for RAG.
+#
+# For managed workers, code/doc search is implemented as:
+#   hive-worker (stdio MCP) → HTTP MCP gateway (operator-injected HIVE_MCP_*)
+#   → indexer API. See control-plane/doc/MANAGED-WORKER-ARCHITECTURE.md.
+#
+# Keep this file only as an illustrative sketch (e.g. a hypothetical future
+# product that merged vector search into board config). You do not need to
+# install or merge it for current Hive + CocoIndex/DocIndex deployments.
 
 ---
 # -----------------------------------------------------------------------------

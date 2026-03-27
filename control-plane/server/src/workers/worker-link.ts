@@ -33,6 +33,7 @@ import {
   upsertWorkerInstanceFromHello,
 } from "./worker-hello.js";
 import { isWorkerDeliveryRedisConfigured, publishWorkerInstanceDeliver } from "./worker-delivery-redis.js";
+import { mintWorkerApiToken } from "../auth/worker-jwt.js";
 
 export type LinkAuth =
   | { kind: "agent"; agentId: string; companyId: string }
@@ -99,6 +100,29 @@ async function sendInstanceLinkTokenRefresh(
     logger.info({ connectionId, workerInstanceRowId }, "worker link sent link_token for reconnect");
   } catch (err) {
     logger.error({ err, connectionId, workerInstanceRowId }, "worker link failed to mint link_token");
+  }
+}
+
+async function sendWorkerApiToken(
+  ws: WebSocket,
+  companyId: string,
+  workerInstanceRowId: string,
+  connectionId: string,
+) {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  const minted = mintWorkerApiToken(workerInstanceRowId, companyId);
+  if (!minted) return;
+  try {
+    ws.send(
+      JSON.stringify({
+        type: "worker_api_token",
+        token: minted.token,
+        expiresAt: minted.expiresAt.toISOString(),
+      }),
+    );
+    logger.info({ connectionId, workerInstanceRowId }, "worker link sent worker_api_token");
+  } catch (err) {
+    logger.error({ err, connectionId, workerInstanceRowId }, "worker link failed to send worker_api_token");
   }
 }
 
@@ -178,6 +202,7 @@ export function attachWorkerLinkUpgrade(
         auth.workerInstanceRowId,
         connectionId,
       );
+      void sendWorkerApiToken(ws, auth.companyId, auth.workerInstanceRowId, connectionId);
       publishLiveEvent({
         companyId: auth.companyId,
         type: "worker.link.connected",
@@ -277,6 +302,7 @@ export function attachWorkerLinkUpgrade(
               instanceRowId,
               connectionId,
             );
+            await sendWorkerApiToken(ws, auth.companyId, instanceRowId, connectionId);
             publishLiveEvent({
               companyId: auth.companyId,
               type: "worker.drone.registered",
@@ -637,6 +663,8 @@ export function sendRunToWorker(
     agentId?: string;
     adapterKey?: string;
     context?: unknown;
+    /** OpenAI-style model id for model-gateway routing and cost attribution. */
+    modelId?: string;
     placementId?: string;
     expectedWorkerInstanceId?: string;
   },

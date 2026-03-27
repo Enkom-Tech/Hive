@@ -87,10 +87,10 @@ func (e *AcpxExecutor) Run(ctx context.Context, payload *Payload, workspaceDir s
 	if err != nil {
 		absDir = workspaceDir
 	}
-	env := append(os.Environ(),
+	env := AppendModelEnv(append(os.Environ(),
 		"HIVE_AGENT_ID="+payload.AgentID,
 		"HIVE_RUN_ID="+payload.RunID,
-	)
+	), payload.ModelID)
 	if len(payload.Context) > 0 {
 		env = append(env, "HIVE_CONTEXT_JSON="+base64.StdEncoding.EncodeToString(payload.Context))
 	}
@@ -117,10 +117,10 @@ func (e *AcpxExecutor) RunStream(ctx context.Context, payload *Payload, workspac
 	if err != nil {
 		absDir = workspaceDir
 	}
-	env := append(os.Environ(),
+	env := AppendModelEnv(append(os.Environ(),
 		"HIVE_AGENT_ID="+payload.AgentID,
 		"HIVE_RUN_ID="+payload.RunID,
-	)
+	), payload.ModelID)
 	if len(payload.Context) > 0 {
 		env = append(env, "HIVE_CONTEXT_JSON="+base64.StdEncoding.EncodeToString(payload.Context))
 	}

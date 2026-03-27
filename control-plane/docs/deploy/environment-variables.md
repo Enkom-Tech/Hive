@@ -103,7 +103,10 @@ When `HIVE_DEPLOYMENT_MODE=authenticated`, one of `BETTER_AUTH_SECRET` or `HIVE_
 | `HIVE_WORKER_PROVISION_MANIFEST_FILE` | — | Optional JSON file path for worker provisioning manifest when inline JSON is unset |
 | `HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY_FILE` | — | Optional PEM path for Ed25519 private key; when set, manifest GET responses include `X-Hive-Manifest-Signature` |
 | `HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY` | — | Optional inline PEM or base64 PEM for Ed25519 manifest signing (prefer `_SIGNING_KEY_FILE` in production) |
-| `HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS` | — | Comma-separated action ids for `POST /api/worker-tools/bridge` (agent auth); empty disables the bridge. Includes `cost.report`, `issue.appendComment`, `issue.transitionStatus` |
+| `HIVE_WORKER_JWT_SECRET` | — | HS256 secret for **worker-instance** JWT (`worker_api_token` WebSocket message, `POST /api/worker-api/*`). Omit to disable worker JWT minting and verification |
+| `HIVE_WORKER_JWT_TTL_SECONDS` | `86400` | Worker JWT lifetime |
+| `HIVE_WORKER_JWT_ISSUER` | `hive` | Optional issuer claim |
+| `HIVE_WORKER_JWT_AUDIENCE` | `hive-worker-api` | Optional audience claim |
 | `HIVE_WORKER_RELEASES_REPO` | (follows `HIVE_RELEASES_REPO`) | GitHub `owner/repo` for worker release assets when manifest URL is unset |
 | `HIVE_WORKER_RELEASE_TAG` | `v` + app version | GitHub release tag for worker binaries (e.g. `v0.2.7`) |
 | `HIVE_WORKER_ARTIFACT_BASE_URL` | — | GitHub mode only: HTTPS prefix (no trailing slash); download URLs in API responses use `{base}/{filename}` |
@@ -122,7 +125,21 @@ When `HIVE_DEPLOYMENT_MODE=authenticated`, one of `BETTER_AUTH_SECRET` or `HIVE_
 | `HIVE_PROVISION_MANIFEST_BEARER` | Optional Bearer token sent when fetching `HIVE_PROVISION_MANIFEST_URL` (overrides automatic use of link credentials) |
 | `HIVE_PROVISION_MANIFEST_PUBLIC_KEY` | When set, `hive-worker` requires a valid `X-Hive-Manifest-Signature` (Ed25519) on manifest HTTP responses before parsing (32-byte base64 key or PEM) |
 | `HIVE_PROVISION_MANIFEST_HOOKS` | Set to `1` to run optional `aptPackages` / `npmGlobal` / `dockerImages` from the manifest at startup (requires those tools on `PATH`; not compatible with default distroless image) |
-| `HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS` | Comma-separated allowlist for worker tool-bridge actions (default deny-all); typical actions: `cost.report`, `issue.appendComment`, `issue.transitionStatus`, `issue.get` |
+| `HIVE_WORKER_STATE_DIR` | Optional directory for persisted `link-token` and **`worker-jwt`** (worker API token for `hive-worker mcp`) |
+| `HIVE_MCP_SERVER_COMMAND` | Optional path to `hive-worker` **inside** an agent container image; used for `.mcp.json` and `HIVE_WORKER_BINARY` when it differs from the drone host binary |
+| `HIVE_MCP_CODE_URL` | Injected by the Hive operator when a ready **`HiveIndexer`** has `gatewayImage`: HTTP MCP gateway base URL ending in `/mcp`. Used by **`hive-worker mcp`** to proxy **`code.search`** / **`code.indexStats`** (never passed into agent containers by the container executor) |
+| `HIVE_MCP_CODE_TOKEN` | Worker-tier gateway token (Secret `secretKeyRef`); pair with `HIVE_MCP_CODE_URL` |
+| `HIVE_MCP_URL` / `HIVE_MCP_TOKEN` | Legacy alias for the code indexer gateway (same semantics as `HIVE_MCP_CODE_*` when set) |
+| `HIVE_MCP_DOCS_URL` / `HIVE_MCP_DOCS_TOKEN` | Injected when a ready **`HiveDocIndexer`** has a gateway; used to proxy **`documents.search`** / **`documents.indexStats`** |
+| `HIVE_MCP_INDEXER_MAX_TEXT_BYTES` | Optional cap on text returned from **`code.search`** / **`documents.search`** (after JSON parse); **0** or unset = unlimited; max **8388608** |
+| `HIVE_MCP_INDEXER_HTTP_TIMEOUT_MS` | **hive-worker:** HTTP client timeout for MCP gateway round-trips (default **90000**, max **600000**) |
+| `HIVE_MCP_INDEXER_CB_FAILURES` | **hive-worker:** consecutive failures before the per-gateway **circuit breaker** opens; **0** disables (default **5**) |
+| `HIVE_MCP_INDEXER_CB_OPEN_MS` | **hive-worker:** cooldown while the circuit is open (default **30000**) |
+| `DOCINDEX_MCP_WORKER_SAFE` | **DocIndex API:** when **1**/`true`, block admin MCP tools per shared **`blocklist.json`** `docindex` list for worker-facing URLs |
+| `DOCINDEX_MCP_BLOCKLIST_FILE` | Optional override path to **`blocklist.json`** (must contain **`docindex`** array) |
+| `HIVE_WASM_SKILL_TIMEOUT_MS` | Max wall time for each WASM MCP skill run (default **30000**; max **600000**). Uses wazero **CloseOnContextDone** so runaway guests are cut off |
+| `HIVE_WASM_MEMORY_LIMIT_PAGES` | Wasm **memory limit pages** (64 KiB per page; default **256** ≈ 16 MiB; max **4096**) |
+| `HIVE_WASM_MAX_STDOUT_BYTES` | Cap on stdout captured per skill (default **2097152**; max **16777216**) |
 | `HIVE_AGENT_KEY` | Opaque secret passed as the WebSocket `token` (Bearer or query). Use a **short-lived enrollment token** from the board UI when possible, or a long-lived agent API key for automation |
 | `HIVE_PAIRING` | Set to `1`/`true`/`yes`: when **no** enrollment/API token is set yet, **`hive-worker`** runs board push-pairing then starts the normal link (same process). Ignored if the `pair` subcommand is used |
 | `HIVE_WORKER_ENROLLMENT_TOKEN` | Optional: read by the Hive CLI (`hive worker link`); forwarded to the worker as `HIVE_AGENT_KEY` so you do not mix enrollment secrets with long-lived keys in the same env var name |

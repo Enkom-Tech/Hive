@@ -1,0 +1,9 @@
+# In-cluster Dragonfly; object store is external S3-compatible. Edit juicefs-storageclass.yaml credentials.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hive-storage
+resources:
+  - namespace.yaml
+  - dragonfly.yaml
+  - juicefs-storageclass.yaml
+  - poddisruptionbudgets.yaml

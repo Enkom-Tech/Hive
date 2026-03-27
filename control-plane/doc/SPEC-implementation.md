@@ -582,6 +582,8 @@ See [doc/MANAGED-WORKER-ARCHITECTURE.md](MANAGED-WORKER-ARCHITECTURE.md) for the
 
 The control plane has a single adapter type: **managed worker**. There is no registry of process/http/claude-local/codex-local/cursor/openclaw_gateway adapters. All invocation and status flows go through the worker. All communication uses a single WebSocket link (worker connects to control plane); see DRONE-SPEC and MANAGED-WORKER-ARCHITECTURE. The drone (worker) implementation contract is in [doc/DRONE-SPEC.md](DRONE-SPEC.md).
 
+**Worker MCP and `/api/worker-api` contract matrix** (tools, transports, authz, shipped vs deferred): [DRONE-SPEC.md §7](DRONE-SPEC.md#7-tools--mcp-agents-to-control-plane-via-drone) (*Worker MCP and worker-api contract matrix*). Issue create/patch (non-status) and agent hire are on worker-api with board parity; **request_deploy** and similar remain under *Deferred MCP-shaped capabilities* (intentional, not a missing integration). **Alerts:** worker-api 401/403 and indexer MCP — [docs/deploy/security-runbook.md](docs/deploy/security-runbook.md) (*Alerts: worker MCP and indexers*).
+
 ## 11.2 Context Delivery
 
 Context is sent to the worker for a run (worker passes it to the agent as needed):

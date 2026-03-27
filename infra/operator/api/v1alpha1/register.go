@@ -17,5 +17,6 @@ func init() {
 		&HiveCompany{}, &HiveCompanyList{},
 		&HiveWorkerPool{}, &HiveWorkerPoolList{},
 		&HiveIndexer{}, &HiveIndexerList{},
+		&HiveDocIndexer{}, &HiveDocIndexerList{},
 	)
 }

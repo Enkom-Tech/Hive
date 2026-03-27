@@ -37,7 +37,11 @@ git clone --depth 1 https://github.com/fastapi/fastapi.git
 cd ..
 ```
 
-### 3. Start Services (Docker Compose)
+### 3. Configure Secrets
+
+Copy `.env.example` to `.env` and set required values before starting. For K8s provisioning (Sealed Secrets, External Secrets Operator, Vault Agent), see [docs/secrets.md](../../docs/secrets.md).
+
+### 4. Start Services (Docker Compose)
 
 ```bash
 docker-compose up -d
@@ -103,8 +107,23 @@ kubectl port-forward -n cocoindex svc/cocoindex 8080:8080
 | `COCOINDEX_LANCEDB_URI` | `/data/lancedb` | LanceDB storage path |
 | `COCOINDEX_EMBEDDING_URL` | `http://llama-embeddings:8080` | Embedding service URL |
 | `COCOINDEX_EMBEDDING_DIM` | `4096` | Embedding dimensions |
+| `COCOINDEX_EMBEDDING_OPENAI_COMPATIBLE` | (unset) | When `true`/`1`, call `POST {embedding_url}/v1/embeddings` (OpenAI shape) instead of llama.cpp paths |
+| `COCOINDEX_EMBEDDING_MODEL_ID` | (unset) | Model id sent in the OpenAI-compatible embedding body (required if OpenAI mode is on) |
 | `COCOINDEX_INDEX_ON_STARTUP` | `true` | Auto-index on startup |
 | `COCOINDEX_WATCH_REPOS` | `true` | Watch for file changes |
+| `COCOINDEX_EMBEDDING_BATCH_SIZE` | `32` | Texts per embedding HTTP request |
+| `COCOINDEX_EMBEDDING_MAX_CONCURRENT_BATCHES` | `1` | Concurrent in-flight embedding requests (raise only if the embed server can handle it) |
+| `COCOINDEX_MAX_CONCURRENT_FILE_TASKS` | `8` | Concurrent worker threads for read+chunk during repo indexing |
+| `COCOINDEX_RATE_LIMIT_INDEX` | `10/minute` | slowapi limit on `POST /index` |
+| `COCOINDEX_RATE_LIMIT_SEARCH` | `60/minute` | slowapi limit on search routes |
+
+Point `COCOINDEX_EMBEDDING_URL` at the same unified model router as chat when you centralize routes; keep direct llama.cpp URLs when batch latency matters.
+
+### Performance notes
+
+- Bulk indexing defers LanceDB vector-index maintenance until the end of each `_embed_and_upsert` (and DocIndex inline bulk defers until the end of the full index run), instead of after every embedding batch.
+- Logs (JSON): `embed_batch_complete`, `lance_merge_insert_ms`, `vector_index_finalize_ms`, `search_query_embed_ms` (debug); `index_repositories_complete`, `vector_index_finalize_ms` (info).
+- **Large corpora:** `get_existing_hashes` loads all `(file_path, file_hash)` rows for a repo. If that scan dominates, evaluate LanceDB scalar/BTREE indexes on `repo_name` + `file_path`, a compact sidecar store, or periodic full reindex — trade-offs are ops complexity vs. query latency.
 
 ### Hive CRD
 
@@ -128,6 +147,19 @@ spec:
     autoIndex: true
 ```
 
+## Hive integration (MCP and cost events)
+
+### MCP gateway (Python vs Go)
+
+- **Python:** `mcp_gateway.py` — default in operator manifests today. Set **`GATEWAY_DOCINDEX_MODE=1`** when pointing at a DocIndex API (port 8082); the HiveDocIndexer operator sets this automatically.
+- **Go:** `mcp-gateway-go/` — same env vars (`GATEWAY_WORKER_TOKEN`, `GATEWAY_ADMIN_TOKEN`, `GATEWAY_INDEXER_URL`), plus **`GATEWAY_DOCINDEX_MODE=1`** when the indexer URL targets DocIndex (port 8082), matching Python behavior.
+- **Shared blocklist:** `mcp-gateway-go/blocklist.json` lists tools blocked for the worker tier in **cocoindex** vs **docindex** mode; Python loads the same file (override path with **`GATEWAY_WORKER_BLOCKLIST_FILE`**).
+- **Agents:** use **`hive-worker mcp`** (stdio) only. The worker pod receives **`HIVE_MCP_CODE_URL` / `HIVE_MCP_CODE_TOKEN`** (and legacy **`HIVE_MCP_URL` / `HIVE_MCP_TOKEN`**) and exposes tools **`code.search`** / **`code.indexStats`** that proxy to this gateway—agents do not hold indexer tokens.
+
+### RAG indexing and `cost_events`
+
+Indexing-related usage can be recorded in `cost_events` with `source: rag_index` and `agent_id` null (company-level rows). Emit batches after index runs using token or wall-clock estimates from your embedding backend; align embedding model ids with `inference_models.kind = embed` in the control plane when you use the shared catalog.
+
 ## File Structure
 
 ```
@@ -137,12 +169,14 @@ spec:
 ├── Dockerfile.lancedb          # LanceDB server
 ├── docker-entrypoint.sh        # Auto-index on startup
 ├── cocoindex_server.py         # Main Python server
+├── mcp_gateway.py              # MCP edge proxy (Python)
+├── mcp-gateway-go/             # MCP edge proxy (Go, optional)
 ├── lancedb_server.py           # LanceDB REST API
 ├── requirements.txt            # Python dependencies
 ├── k3d-k3s-setup.sh            # K3s cluster bootstrap
 ├── k8s/
 │   └── hivecluster-indexer.yaml # Hive CRDs
-├── control-plane-config.yaml   # Hive control-plane config
+├── control-plane-config.yaml   # Illustrative YAML only — NOT loaded by Hive TS (see file header)
 ├── test-commands.sh            # Test curls
 ├── WSL2-SETUP.md               # WSL2 setup guide
 └── README.md                   # This file
@@ -167,12 +201,14 @@ See [WSL2-SETUP.md](WSL2-SETUP.md) for detailed WSL2 installation instructions i
 
 ## Architecture
 
+**Hive + managed worker (implemented):** agents use **`hive-worker mcp`** (stdio), which proxies search tools to the **MCP gateway** in cluster; the control plane does **not** call CocoIndex directly. The diagram below is the **standalone stack** (compose / local): control plane is shown for context only—not a live integration wire in this repo.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         Hive Control Plane                    │
 │                    (Node.js + PostgreSQL)                     │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ MCP / REST
+                       │ MCP / REST (standalone / illustrative)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      CocoIndex API (8080)                     │

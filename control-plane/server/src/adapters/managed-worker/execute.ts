@@ -13,6 +13,27 @@ import {
 } from "../../services/placement.js";
 import { logPlacementMetric } from "../../placement-metrics.js";
 
+/** Logical LLM model id for this run (OpenAI-style `model` field / model-gateway routing). */
+function resolveRunModelId(
+  agent: { adapterConfig: unknown },
+  context: Record<string, unknown>,
+): string | undefined {
+  const fromCtx =
+    typeof context.model === "string"
+      ? context.model.trim()
+      : typeof context.modelId === "string"
+        ? context.modelId.trim()
+        : "";
+  if (fromCtx) return fromCtx;
+  const cfg =
+    agent.adapterConfig && typeof agent.adapterConfig === "object" && agent.adapterConfig !== null
+      ? (agent.adapterConfig as Record<string, unknown>)
+      : {};
+  const fromAgent =
+    typeof cfg.model === "string" ? cfg.model.trim() : typeof cfg.modelId === "string" ? cfg.modelId.trim() : "";
+  return fromAgent || undefined;
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, context, adapterKey } = ctx;
   const deps = getManagedWorkerExecuteDeps();
@@ -25,6 +46,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
   if (adapterKey !== undefined) {
     payload.adapterKey = adapterKey;
+  }
+  const modelId = resolveRunModelId(agent, context);
+  if (modelId !== undefined) {
+    payload.modelId = modelId;
   }
 
   let placementId: string | null = null;

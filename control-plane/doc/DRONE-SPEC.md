@@ -48,8 +48,15 @@ Environment-driven. Key env vars (current or to be specified):
 - `HIVE_ADAPTER_<name>_AGENT` — optional; when set together with `_CMD=acpx`, the adapter uses the acpx (ACP) executor; see [ACPX-INTEGRATION.md](ACPX-INTEGRATION.md).
 - `HIVE_CONTAINER_RUNTIME` — optional; container runtime binary (default `docker`; e.g. `podman`).
 - `HIVE_WORKSPACE` — default workspace directory.
-- `HIVE_PROVISION_CACHE_DIR` — directory for provisioned adapters (default `~/.hive-worker/cache` or `/tmp/hive-worker-cache`).
-- `HIVE_MODEL_GATEWAY_URL` — optional; when set, the single OpenAI-compatible base URL for LLM inference (e.g. model gateway). The drone passes it to the executor/context so agents use this endpoint; see [K3S-LLM-DEPLOYMENT.md](K3S-LLM-DEPLOYMENT.md).
+- `HIVE_PROVISION_CACHE_DIR` — directory for provisioned adapters (default `~/.hive-worker/cache` or `/tmp/hive-worker-cache`). Subdirectory **`skills/`** may hold **`*.wasm`** plus **`{base}.schema.json`** for MCP wasm tools loaded by **`hive-worker mcp`**.
+- `HIVE_WORKER_STATE_DIR` — optional; directory for persisted **`link-token`** and **`worker-jwt`** (worker API JWT for `hive-worker mcp` and `/api/worker-api/*`).
+- `HIVE_MCP_SERVER_COMMAND` — optional; when the agent runs in a container, path to the **`hive-worker`** binary **inside the container image** for `.mcp.json` and `HIVE_WORKER_BINARY` (host `os.Executable()` is wrong in that case).
+- `HIVE_MCP_INDEXER_HTTP_TIMEOUT_MS` — optional; HTTP client timeout in ms for MCP gateway calls from **`hive-worker mcp`** (default **90000**, max **600000**).
+- `HIVE_MCP_INDEXER_CB_FAILURES` — optional; consecutive gateway failures before a per-gateway **circuit breaker** opens (default **5**); **0** disables breaking.
+- `HIVE_MCP_INDEXER_CB_OPEN_MS` — optional; cooldown in ms while the circuit stays open (default **30000**).
+- `HIVE_WASM_SKILL_TIMEOUT_MS` / `HIVE_WASM_MEMORY_LIMIT_PAGES` / `HIVE_WASM_MAX_STDOUT_BYTES` — optional bounds for WASM skills under **`skills/`** (see §7 and MANAGED-WORKER-ARCHITECTURE).
+- `HIVE_MODEL_GATEWAY_URL` — optional; when set, the single OpenAI-compatible base URL for LLM inference (e.g. model gateway or Bifrost). The drone passes it to the executor/context so agents use this endpoint; see [K3S-LLM-DEPLOYMENT.md](K3S-LLM-DEPLOYMENT.md). Router virtual keys and the model catalog are scoped by **deployment** (`hive_deployments`), which is separate from in-app **companies**; see [MANAGED-WORKER-ARCHITECTURE.md](MANAGED-WORKER-ARCHITECTURE.md) (*Deployment vs company*).
+- `OPENAI_BASE_URL` / `OPENAI_API_KEY` — optional; common OpenAI-SDK env vars. When using **Bifrost** with mandatory governance, set `OPENAI_API_KEY` to a Bifrost virtual key (`sk-bf-…`) and base URL to the gateway `/v1` (often same value as `HIVE_MODEL_GATEWAY_URL`). **Process** executors inherit host env automatically; **container** executors receive `HIVE_MODEL_GATEWAY_URL`, `OPENAI_BASE_URL` (defaults to gateway URL when unset), `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` when those are set on the worker pod. See [ADR 006](adr/006-bifrost-model-gateway.md) and `infra/model-gateway/BIFROST-INTEGRATION.md`.
 - `HIVE_WORKER_HTTP_ADDR` — optional TCP address for the drone’s local HTTP server (`GET /health`, `GET /metrics`). Default `:8080`. Examples: `127.0.0.1:9080`, `:9090`.
 - `HIVE_WORKER_HTTP_PORT_AUTO` — when truthy, if the preferred address is **address already in use**, bind the same host on the next ports (up to 100 attempts). When this variable is **unset**: auto is **on** if `HIVE_WORKER_HTTP_ADDR` is unset or empty (try `:8080`, then `:8081`, …); auto is **off** if `HIVE_WORKER_HTTP_ADDR` is set to a non-empty value (strict). When `HIVE_WORKER_HTTP_PORT_AUTO` **is** set, its value overrides that default (e.g. `0` to fail fast on `:8080` even with no explicit addr).
 
@@ -86,7 +93,7 @@ The control plane MAY persist this on the agent row and upsert **`worker_instanc
 
 ### Status messages
 
-The drone sends **status** messages with at least: `runId`, `status` (running | done | failed | cancelled), and optionally `exitCode`, `signal`, `error`. Align with what the control plane expects (see SPEC-implementation and heartbeat run schema). Sent on run start (running), on run end (done/failed/cancelled).
+The drone sends **status** messages with at least: `runId`, `status` (running | done | failed | cancelled), and optionally `exitCode`, `signal`, `error`. Final messages MAY include **`usage`** (`inputTokens`, `outputTokens`, `cachedInputTokens`), **`costUsd`**, **`provider`**, and **`model`** for ledger ingestion (see heartbeat cost application). Tools may write **`.hive-run-usage.json`** in the run workspace; the worker merges it into the terminal status when present. Align with what the control plane expects (see SPEC-implementation and heartbeat run schema). Sent on run start (running), on run end (done/failed/cancelled).
 
 ### Log messages
 
@@ -146,7 +153,7 @@ The drone is the harness: it is the only process that connects to the control pl
 
 ### Spawning
 
-The drone runs the agent process (e.g. CLI or script), using the provisioned agent runtime. It MUST pass at least: agent identity (agentId), run identity (runId), and context (opaque blob). Current implementation: env `HIVE_AGENT_ID`, `HIVE_RUN_ID`, `HIVE_CONTEXT_JSON` (base64-encoded context); command from `HIVE_TOOL_CMD` or executor config; workspace from `HIVE_WORKSPACE` or default.
+The drone runs the agent process (e.g. CLI or script), using the provisioned agent runtime. It MUST pass at least: agent identity (agentId), run identity (runId), and context (opaque blob). Current implementation: env `HIVE_AGENT_ID`, `HIVE_RUN_ID`, `HIVE_CONTEXT_JSON` (base64-encoded context); when the run message includes **`modelId`** (or legacy **`model`**), also **`HIVE_MODEL_ID`** and **`HIVE_MODEL`**; command from `HIVE_TOOL_CMD` or executor config; workspace from `HIVE_WORKSPACE` or default.
 
 ### Execution adapters (optional)
 
@@ -184,16 +191,80 @@ The drone holds credentials used to call the control plane API (work-items, hear
 
 ## 7. Tools / MCP (agents to control plane via drone)
 
-Agents do not call the control plane directly. The drone SHALL expose a way for agents to request control-plane actions (e.g. create task, update task, report cost, request deploy of another agent). At a high level: the drone SHALL expose tools or an MCP server (or equivalent) that agents can invoke; those tools translate into authenticated calls to the control plane API. Current implementation: no tools/MCP; this is a gap.
+Agents do not call the control plane directly. The drone SHALL expose a way for agents to request control-plane actions (e.g. create task, update task, report cost, request deploy of another agent). At a high level: the drone SHALL expose tools or an MCP server (or equivalent) that agents can invoke; those tools translate into authenticated calls to the control plane API. Current implementation: **`hive-worker mcp`** (stdio JSON-RPC) proxies to **`POST/GET /api/worker-api/*`** using a **worker-instance JWT** received as WebSocket message **`worker_api_token`** and persisted as **`worker-jwt`**; optional **WASM** skills under **`HIVE_PROVISION_CACHE_DIR/skills/`** (`*.wasm` + sibling **`*.schema.json`**). The same stdio server **forwards** code/document **search** tools to the tenant **HTTP MCP gateway** using **`HIVE_MCP_CODE_URL` / `HIVE_MCP_CODE_TOKEN`** and **`HIVE_MCP_DOCS_URL` / `HIVE_MCP_DOCS_TOKEN`** (worker pod env only; legacy **`HIVE_MCP_URL` / `HIVE_MCP_TOKEN`** alias the code gateway). Tool names exposed to agents include **`code.search`**, **`code.indexStats`**, **`documents.search`**, **`documents.indexStats`** when configured. Executor writes **`.mcp.json`** and sets **`HIVE_WORKER_BINARY`**, **`HIVE_MCP_CMD`**, **`HIVE_WORKER_STATE_DIR`** for the agent process. Control plane requires **`HIVE_WORKER_JWT_SECRET`** to mint worker JWTs.
 
-### Tool list and API mapping
+### Shipped MCP tools (`hive-worker mcp`)
 
-Minimal mapping from tool names to control-plane API (spec only; no implementation in this doc). Exact paths and auth (worker credentials on behalf of agent) are in [SPEC-implementation.md](SPEC-implementation.md) §10.
+| MCP tool | Backend |
+|----------|---------|
+| `cost.report` | `POST /api/worker-api/cost-report` |
+| `issue.appendComment` | `POST /api/worker-api/issues/:issueId/comments` |
+| `issue.transitionStatus` | `POST /api/worker-api/issues/:issueId/transition` |
+| `issue.get` | `GET /api/worker-api/issues/:issueId` |
+| `issue.create` | `POST /api/worker-api/issues` |
+| `issue.update` | `PATCH /api/worker-api/issues/:issueId` (no `status`; use `issue.transitionStatus`) |
+| `agent.requestHire` | `POST /api/worker-api/agent-hires` |
+| `code.search` | Worker → HTTP MCP gateway → indexer `search_code` (when `HIVE_MCP_CODE_*` set) |
+| `code.indexStats` | Gateway → `get_index_stats` |
+| `documents.search` | Gateway → `search_documents` (when `HIVE_MCP_DOCS_*` set) |
+| `documents.indexStats` | Gateway → `get_index_stats` |
+| WASM tools | `HIVE_PROVISION_CACHE_DIR/skills/*.wasm` (operator-controlled; see worker env limits) |
 
-- **create_task** — Creates an issue/task (e.g. `POST /companies/:companyId/issues`). Params: title, description, assignee (agent or human), project, etc. Used for delegation (assign work to another agent).
-- **update_task** — Updates an issue (e.g. `PATCH /issues/:issueId`). Params: status, comment, etc.
-- **request_hire** (or **deploy_agent**) — Creates a hire_agent approval (e.g. `POST /companies/:companyId/approvals` with type hire_agent). Approval can be auto-accepted, approved by CEO agent (when permitted), or approved by board; on approval, agent is created. "Deploy another agent" is this flow.
-- **report_cost** — Submits a cost event (e.g. `POST /companies/:companyId/cost-events`).
+Mutations on checked-out **`in_progress`** issues require **`X-Hive-Run-Id`** (worker sets from `HIVE_RUN_ID`). Exact HTTP rules: [`../docs/api/workers.md`](../docs/api/workers.md) and [`SPEC-implementation.md`](SPEC-implementation.md) §10.
+
+**RAG / indexing** stays in **CocoIndex** and **DocIndex** only; the worker forwards search/stats calls and never re-implements indexing.
+
+### Worker MCP and worker-api contract matrix
+
+Authoritative list for security review and PR gates: any new tool or HTTP action MUST add a row here in the same change.
+
+| Name | Transport | Authentication | Authorization | Data sensitivity | Status | Activity log (mutations) |
+|------|-----------|----------------|---------------|-------------------|--------|---------------------------|
+| `POST /api/worker-api/cost-report` | HTTPS to control plane | Worker-instance JWT (`Authorization: Bearer`) | JWT `company_id`; body `agentId` must be active agent in company | Cost, model, provider | shipped | `worker_api.cost_report` |
+| `POST /api/worker-api/issues/:id/comments` | HTTPS | Worker JWT | Same + issue in company; assignee/checkout rules; `X-Hive-Run-Id` when required | Issue text, comments | shipped | `worker_api.issue_append_comment` |
+| `POST /api/worker-api/issues/:id/transition` | HTTPS | Worker JWT | Same + assignee must be `agentId` | Issue status | shipped | `worker_api.issue_transition_status` |
+| `GET /api/worker-api/issues/:id` | HTTPS | Worker JWT | Same + issue in company | Issue metadata | shipped | `worker_api.issue_get` |
+| `POST /api/worker-api/issues` | HTTPS | Worker JWT | Same + board parity (`createIssue` rules, assignee gates, department constraints, intent folding) | Issue + intent | shipped | `worker_api.issue_create` (+ intent activity) |
+| `PATCH /api/worker-api/issues/:id` | HTTPS | Worker JWT | Same + mutable-field allowlist (no `status`); `X-Hive-Run-Id` when editing checked-out `in_progress` assignee self | Issue fields | shipped | `worker_api.issue_update` |
+| `POST /api/worker-api/agent-hires` | HTTPS | Worker JWT | `agents:create` permission on acting agent; adapter validation; company approval policy for new agents | New agent / approval | shipped | `worker_api.agent_hire` |
+| `cost.report` (MCP) | stdio → above HTTP | JWT via drone (`CPClient`) | Injected `agentId` on worker | Same as cost-report | shipped | (via HTTP) |
+| `issue.appendComment` | stdio → HTTP | JWT | Same | Same | shipped | (via HTTP) |
+| `issue.transitionStatus` | stdio → HTTP | JWT | Same | Same | shipped | (via HTTP) |
+| `issue.get` | stdio → HTTP | JWT | Same | Same | shipped | (via HTTP) |
+| `issue.create` | stdio → HTTP | JWT | Same as `POST …/issues` | Same | shipped | (via HTTP) |
+| `issue.update` | stdio → HTTP | JWT | Same as `PATCH …/issues/:id` | Same | shipped | (via HTTP) |
+| `agent.requestHire` | stdio → HTTP | JWT | Same as `POST …/agent-hires` | Same | shipped | (via HTTP) |
+| `code.search` / `code.indexStats` | stdio → tenant HTTP MCP gateway | Gateway bearer (pod env; not agent env) | Gateway blocklist; tenant indexer ACL | Source code, embeddings metadata | shipped (when `HIVE_MCP_CODE_*` set) | — |
+| `documents.search` / `documents.indexStats` | stdio → gateway | Gateway bearer | Same | Document text | shipped (when `HIVE_MCP_DOCS_*` set) | — |
+| WASM tools (`skills/*.wasm`) | stdio in-process | None (local module) | Operator-only filesystem trust | Tool-defined | shipped (optional) | — |
+
+### Worker-api authorization matrix (`worker_instance` JWT)
+
+Security-review addendum for **who** may trigger **which** HTTP action when using a valid worker-instance JWT (`kind: worker_instance`, company-scoped). The **`agentId`** in the body or query names the **acting** board agent; it must be **active** in the JWT’s company (not `terminated` or `pending_approval`). There is no separate MCP-tool RBAC table — rules are per route in [`worker-api.ts`](../server/src/routes/worker-api.ts).
+
+| Action | Acting agent requirements | Extra gates | Abuse / mitigation |
+|--------|---------------------------|-------------|-------------------|
+| `POST …/cost-report` | In company, active | — | Cost spam → budgets + sensitive rate limits |
+| `POST …/issues` | In company, active | Optional **`X-Hive-Worker-Idempotency-Key`** (replay without duplicate side effects) | Mass create → intent folding + rate limits |
+| `PATCH …/issues/:id` | In company, active | Assignee/department rules; **`X-Hive-Run-Id`** when mutating own checked-out **`in_progress`** issue | Cross-issue edits blocked by company + assignee checks |
+| `POST …/issues/:id/comments` | In company, active | Checkout / assignee rules; **`X-Hive-Run-Id`** when required | Same as board comment path |
+| `POST …/issues/:id/transition` | **Assignee** must be `agentId` | Checkout rules for `in_progress` | Status churn → board semantics + rate limits |
+| `GET …/issues/:id` | In company, active | Issue must be in company | Read metadata only |
+| `POST …/agent-hires` | In company, active | **`agents:create`** permission (or legacy CEO / `permissions.canCreateAgents`) | Hire spam → approval policy + sensitive limits |
+
+**Stdio concurrency:** `hive-worker mcp` uses a **bounded worker pool** for JSON-RPC handling. Default **`HIVE_MCP_MAX_CONCURRENT=1`** (sequential): a long `code.search` blocks other tools until it returns. When set to **N > 1** (max 64), up to **N** `tools/call` / other methods may run concurrently; **stdout lines may arrive out of order**, but each response includes the correct JSON-RPC **`id`**. **WASM** `skills/*.wasm` tools remain **serialized** (one at a time) when N > 1. Do not assume tool **completion order** matches request order unless N=1.
+
+### Deferred MCP-shaped capabilities (still not on `/api/worker-api`)
+
+**Shipped (board parity):** Issue **create** (`POST /api/worker-api/issues`, MCP `issue.create`), issue **patch** excluding **status** (`PATCH /api/worker-api/issues/:id`, MCP `issue.update`; status stays on `POST …/transition`), and **agent hire** (`POST /api/worker-api/agent-hires`, MCP `agent.requestHire`) via the same services and Zod shapes as the board — activity log, sensitive rate limits, and permission checks (`assign` / `agents:create` where applicable). **Create idempotency:** the same **intent folding** canonical key as the board still applies. **POST /api/worker-api/issues** also accepts optional **X-Hive-Worker-Idempotency-Key** (printable ASCII, max 128 chars; hive-worker MCP: issue.create idempotencyKey). The first successful **201** response for a given (company, agent, route, key) is stored and replayed on retries without duplicating activity, webhooks, or heartbeats.
+
+**Still deferred:**
+
+| Capability | Rationale (why deferred) | Preconditions to ship |
+|------------|-------------------------|------------------------|
+| **request_deploy** (another agent/image) | Supply-chain and tenancy risk | Policy from control plane; signed artifacts; audit |
+
+Product shorthand: **request_deploy** covers automated deploy of another agent or image from the worker surface without a board-equivalent flow.
 
 ## 8. Token efficiency and agent-facing format
 
@@ -208,14 +279,15 @@ Structured data returned to agents (e.g. MCP tool results, or CLI output that is
 ## 9. Health and observability
 
 - **Health:** The drone SHOULD expose a health endpoint (e.g. `GET /health`) for load balancers and orchestration. Current: health handler exists in `infra/worker`. This is for local process health only; the **control-plane link** is WebSocket, not an inbound run API.
-- **Metrics:** Optional; e.g. `GET /metrics` in Prometheus format. Current: metrics handler exists.
+- **Metrics:** Optional; e.g. `GET /metrics` in Prometheus format. Current: **`hive_tasks_*`**, **`hive_errors_*`**, plus **`hive_mcp_indexer_*`** (gateway call counts, duration sum/count, circuit-open gauge) and **`hive_wasm_skill_*`** counters.
+- **MCP / indexer logs:** `hive-worker mcp` logs each JSON-RPC method and **`tools/call`** duration to stderr (`hive-mcp:` prefix); WASM skills and indexer gateway calls log separately (`hive-mcp wasm:`, `hive-mcp indexer:`). The HTTP MCP gateway (`mcp-gateway-go`) logs forward latency and indexer HTTP status.
 
 ## 10. Current implementation vs spec (gaps)
 
 | Area | Implemented | Not implemented |
 |------|-------------|-----------------|
 | **Transport** | **WebSocket only** (target). Drone connects outbound to control plane; run/cancel/status/log over same link. | Current code may still use HTTP until migration. |
-| Run | WebSocket message `run` (agentId, runId, context, optional adapterKey); drone acks then spawns | — |
+| Run | WebSocket message `run` (agentId, runId, context, optional adapterKey, optional modelId); drone acks then spawns | — |
 | Concurrency | Parallel runs accepted | — |
 | Executor | One command with HIVE_AGENT_ID, HIVE_RUN_ID, HIVE_CONTEXT_JSON, HIVE_WORKSPACE | — |
 | Execution adapters | Registry from env (HIVE_ADAPTER_DEFAULT_CMD, HIVE_ADAPTER_<name>_CMD); adapterKey in payload selects executor; optional _URL (provisioning), _CONTAINER+_IMAGE (container) | — |
@@ -223,7 +295,7 @@ Structured data returned to agents (e.g. MCP tool results, or CLI output that is
 | Stop/cancel | WebSocket message `cancel` (runId); per-run context cancellation | Grace period / force-kill (optional follow-up) |
 | Install | — | One-liner install with token |
 | Provisioning | Lazy per-adapter from `HIVE_ADAPTER_<key>_URL` and/or `HIVE_PROVISION_MANIFEST_*`; optional startup hooks (`HIVE_PROVISION_MANIFEST_HOOKS=1`); company manifest `GET /api/companies/{id}/worker-runtime/manifest` | Richer policy-driven provisioner as separate component (optional) |
-| Tools/MCP | — | Tools or MCP for agents |
+| Tools/MCP | `hive-worker mcp` + `/api/worker-api/*` (worker JWT); optional gateway-proxied `code.*` / `documents.*`; WASM in `skills/`; issue create/update + agent hire on worker-api | `request_deploy` / image deploy for other agents via worker-api (deferred) |
 | Workspace | Single HIVE_WORKSPACE | Per-run workspace/tree |
 | Per-run container/sandbox | Optional per-adapter (HIVE_ADAPTER_<key>_CONTAINER, _IMAGE); docker run with workspace mount | Spec extends to policy-driven default-on and allowlisted images (not yet implemented) |
 | WebSocket auth | HIVE_CONTROL_PLANE_TOKEN or HIVE_API_KEY at connect (e.g. query param or first message) | — |

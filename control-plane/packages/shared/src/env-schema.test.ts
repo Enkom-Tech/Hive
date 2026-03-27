@@ -53,6 +53,7 @@ describe("env-schema", () => {
     expect(KNOWN_ENV_KEYS.has("BETTER_AUTH_SECRET")).toBe(true);
     expect(KNOWN_ENV_KEYS.has("PATH")).toBe(true);
     expect(KNOWN_ENV_KEYS.has("NODE_ENV")).toBe(true);
+    expect(KNOWN_ENV_KEYS.has("HIVE_BIFROST_ADMIN_BASE_URL")).toBe(true);
     expect(KNOWN_ENV_KEYS.has("UNKNOWN_KEY")).toBe(false);
   });
 });

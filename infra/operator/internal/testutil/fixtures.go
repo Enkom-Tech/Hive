@@ -28,6 +28,21 @@ func HiveCompanyFixture(name, namespace, companyID string) *hivev1alpha1.HiveCom
 	}
 }
 
+// HiveIndexerFixture returns a minimal HiveIndexer for integration tests (CocoIndex + LanceDB PVC).
+func HiveIndexerFixture(name, namespace, companyRef string) *hivev1alpha1.HiveIndexer {
+	return &hivev1alpha1.HiveIndexer{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: hivev1alpha1.HiveIndexerSpec{
+			CompanyRef:   companyRef,
+			IndexerImage: "cocoindex:test",
+			EmbeddingURL: "http://embeddings.test.svc.cluster.local:8080",
+			EmbeddingDim: 4096,
+			StorageSize:  "1Gi",
+			StorageClass: "standard",
+		},
+	}
+}
+
 // HiveWorkerPoolFixture returns a minimal HiveWorkerPool for tests.
 func HiveWorkerPoolFixture(name, namespace, companyRef, workerImage string, replicas int32) *hivev1alpha1.HiveWorkerPool {
 	return &hivev1alpha1.HiveWorkerPool{

@@ -446,14 +446,21 @@ export function heartbeatService(db: Db) {
 
     const sanitized = sanitizeWorkerStatusPayload(payload);
     const finishedAtDate = sanitized.finishedAt ? new Date(sanitized.finishedAt) : new Date();
-    const usageJson =
+    const hasTokenOrCost =
       sanitized.usage.inputTokens > 0 ||
       sanitized.usage.outputTokens > 0 ||
       sanitized.usage.cachedInputTokens > 0 ||
-      sanitized.costUsd > 0
+      sanitized.costUsd > 0;
+    const hasModelAttribution =
+      (sanitized.provider && sanitized.provider !== "unknown") ||
+      (sanitized.model && sanitized.model !== "unknown");
+    const usageJson =
+      hasTokenOrCost || hasModelAttribution
         ? ({
             ...sanitized.usage,
             ...(sanitized.costUsd > 0 ? { costUsd: sanitized.costUsd } : {}),
+            ...(sanitized.provider && sanitized.provider !== "unknown" ? { provider: sanitized.provider } : {}),
+            ...(sanitized.model && sanitized.model !== "unknown" ? { model: sanitized.model } : {}),
           } as Record<string, unknown>)
         : null;
 

@@ -1,14 +1,8 @@
-# Hive operator Makefile. Run from Linux/WSL2.
+# Hive operator Makefile.
+# Requires Go 1.22+ (repo uses 1.26). On Windows, use Git Bash / MSYS2, or run .\manifests.ps1 / .\generate.ps1 from PowerShell.
+# controller-gen v0.15.0 does not build on Go 1.26; we pin v0.20.1 and invoke it via `go run` (no GOBIN install).
 
-SHELL := /bin/bash
-UNAME_S := $(shell uname -s 2>/dev/null)
-ifeq ($(UNAME_S),Linux)
-  # ok
-else ifeq ($(UNAME_S),Darwin)
-  # ok
-else
-  $(error "Operator build and tests require Linux or macOS (use WSL2 on Windows)")
-endif
+SHELL := bash
 
 # Image
 IMG ?= hive-operator:latest
@@ -19,6 +13,11 @@ GOBIN := $(shell go env GOBIN 2>/dev/null)
 ifeq ($(GOBIN),)
   GOBIN := $(shell go env GOPATH)/bin
 endif
+
+# Pin to a controller-tools release that compiles with Go 1.26 (older releases pull golang.org/x/tools that break the compiler).
+CONTROLLER_GEN_VERSION ?= v0.20.1
+CONTROLLER_GEN := go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
+
 # envtest binaries for controller integration tests (run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
 ENVTEST_ASSETS := $(shell PATH="$(GOBIN):$$PATH" setup-envtest use -p path 1.28.x 2>/dev/null)
 
@@ -44,14 +43,12 @@ test: test-unit test-integration
 
 .PHONY: generate
 generate:
-	@test -x $(GOBIN)/controller-gen || go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.15.0
-	$(GOBIN)/controller-gen object:headerFile=hack/boilerplate.go.txt paths="./..."
-	$(GOBIN)/controller-gen crd webhook rbac:roleName=manager-role output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths="./..."
+	$(CONTROLLER_GEN) crd paths=./... webhook rbac:roleName=manager-role output:crd:artifacts:config=config/crd/bases
 
 .PHONY: manifests
 manifests:
-	@test -x $(GOBIN)/controller-gen || go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.15.0
-	$(GOBIN)/controller-gen crd webhook rbac:roleName=manager-role output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) crd paths=./... webhook rbac:roleName=manager-role output:crd:artifacts:config=config/crd/bases
 
 .PHONY: docker-build
 docker-build:

@@ -1,7 +1,9 @@
-# JuiceFS CSI driver is typically installed via Helm:
-# helm repo add juicefs https://juicedata.github.io/charts
-# helm install juicefs-csi juicefs/juicefs-csi-driver -n kube-system -f juicefs-csi-values.yaml
-# This file is a placeholder; use the official JuiceFS CSI Helm chart for production.
+# JuiceFS CSI driver: install via Helm (not part of the storage Kustomize bundle).
+#   helm repo add juicefs https://juicedata.github.io/charts
+#   helm install juicefs-csi juicefs/juicefs-csi-driver -n kube-system -f juicefs-csi-values.yaml
+# Default data/metadata stack lives in kustomization.yaml (RustFS + Dragonfly + juicefs-sc).
+# Alternatives: overlays/object-minio, meta-external, object-external-s3, fully-external (managed HA backends)
+# This file only documents the above; the Namespace below is optional if kube-system already exists.
 apiVersion: v1
 kind: Namespace
 metadata:

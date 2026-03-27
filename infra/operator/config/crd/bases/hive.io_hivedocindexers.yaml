@@ -1,0 +1,97 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hivedocindexers.hive.io
+spec:
+  group: hive.io
+  names:
+    kind: HiveDocIndexer
+    listKind: HiveDocIndexerList
+    plural: hivedocindexers
+    singular: hivedocindexer
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - companyRef
+                - docIndexImage
+                - parserWorkerImage
+                - embeddingUrl
+                - redisUrlSecretRef
+                - lanceDbStorageSize
+                - lanceDbStorageClass
+                - docsStorageSize
+                - docsStorageClass
+              properties:
+                companyRef:
+                  type: string
+                docIndexImage:
+                  type: string
+                parserWorkerImage:
+                  type: string
+                embeddingUrl:
+                  type: string
+                embeddingDim:
+                  type: integer
+                  format: int32
+                  default: 4096
+                redisUrlSecretRef:
+                  type: string
+                  description: Secret name in tenant namespace; key "url" holds Redis URL for DOCINDEX_REDIS_URL
+                tokenSecretRef:
+                  type: string
+                jobSigningKeySecretRef:
+                  type: string
+                lanceDbStorageSize:
+                  type: string
+                lanceDbStorageClass:
+                  type: string
+                docsStorageSize:
+                  type: string
+                docsStorageClass:
+                  type: string
+                gatewayImage:
+                  type: string
+                  description: MCP gateway image (build from infra/cocoindex-lancedb/Dockerfile.gateway); set GATEWAY_DOCINDEX_MODE=1 via operator
+                resources:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                workerResources:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                nodeSelector:
+                  type: object
+                  additionalProperties:
+                    type: string
+            status:
+              type: object
+              properties:
+                ready:
+                  type: boolean
+                lastSyncAt:
+                  type: string
+                tokenSecretName:
+                  type: string
+                serviceUrl:
+                  type: string
+                gatewayUrl:
+                  type: string
+                gatewaySecretName:
+                  type: string
+                conditions:
+                  description: |-
+                    Latest observations. Type IndexerDegraded: True when DocIndex API/worker Deployments or (if configured) MCP gateway Deployment lack ready replicas.
+                  type: array
+                  items:
+                    type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}

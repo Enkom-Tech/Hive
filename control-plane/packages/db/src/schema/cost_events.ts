@@ -10,7 +10,10 @@ export const costEvents = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
-    agentId: uuid("agent_id").notNull().references(() => agents.id),
+    /** Null for infrastructure costs (e.g. RAG indexing) attributed only at company level. */
+    agentId: uuid("agent_id").references(() => agents.id),
+    /** agent_run | rag_index | gateway_aggregate | unknown */
+    source: text("source").notNull().default("agent_run"),
     issueId: uuid("issue_id").references(() => issues.id),
     projectId: uuid("project_id").references(() => projects.id),
     goalId: uuid("goal_id").references(() => goals.id),

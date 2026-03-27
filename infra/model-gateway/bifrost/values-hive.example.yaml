@@ -1,0 +1,109 @@
+# Example Helm values for running Bifrost as Hive's model gateway.
+# Merge with upstream chart: bifrost/helm-charts/bifrost (maximhq/bifrost).
+# Replace ALL placeholder keys and pin image.tag to a tested release.
+
+image:
+  repository: docker.io/maximhq/bifrost
+  pullPolicy: IfNotPresent
+  tag: "v1.3.55"
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+storage:
+  mode: sqlite
+  persistence:
+    enabled: true
+    size: 5Gi
+  configStore:
+    enabled: true
+  logsStore:
+    enabled: true
+
+postgresql:
+  enabled: false
+
+vectorStore:
+  enabled: false
+  type: none
+
+bifrost:
+  appDir: /app/data
+  port: 8080
+  host: 0.0.0.0
+  logLevel: info
+  logStyle: json
+
+  client:
+    dropExcessRequests: false
+    initialPoolSize: 100
+    allowedOrigins: []
+    enableLogging: true
+    enforceGovernanceHeader: false
+    allowDirectKeys: false
+    maxRequestBodySizeMb: 100
+
+  providers:
+    openai:
+      network_config:
+        base_url: "http://vllm-llama.hive-llm.svc.cluster.local:8000/v1"
+      keys:
+        - name: "vllm-primary"
+          value: "env.VLLM_API_KEY"
+          weight: 1
+          models:
+            - "vllm:llama-3.1-8b"
+
+  governance:
+    budgets: []
+    rateLimits: []
+    virtualKeys:
+      - id: "vk-hive-company-a"
+        name: "Example company A"
+        # Replace with sk-bf-... from Bifrost UI or wire chart secret refs per upstream Helm docs.
+        value: "sk-bf-replace-me"
+        is_active: true
+        provider_configs:
+          - provider: "openai"
+            weight: 1
+            keys:
+              - name: "vllm-primary"
+
+  plugins:
+    telemetry:
+      enabled: true
+    logging:
+      enabled: true
+      config: {}
+    governance:
+      enabled: true
+      config:
+        is_vk_mandatory: true
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+autoscaling:
+  enabled: false

@@ -1,0 +1,5 @@
+# Merged inputs for CI / local tests (API + worker code paths).
+# Regenerate requirements-ci.lock after worker changes: use Linux (or `python:3.12-bookworm` + pip-tools)
+# so the merged lock matches worker/requirements.lock (PyTorch CPU index, no pywin32).
+-r requirements.txt
+-r worker/requirements.txt

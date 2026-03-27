@@ -70,6 +70,13 @@ export const ENV_VAR_DOCS: Record<string, EnvVarDoc> = {
   RUN_LOG_BASE_PATH: { description: "Base path for run logs" },
   HIVE_ATTACHMENT_MAX_BYTES: { description: "Max attachment size in bytes", default: "10485760" },
   HIVE_ALLOWED_ATTACHMENT_TYPES: { description: "Comma-separated MIME patterns for attachments" },
+  HIVE_BIFROST_ADMIN_BASE_URL: {
+    description:
+      "Bifrost HTTP base URL (e.g. http://bifrost:8080) for governance virtual-key provisioning from the board",
+  },
+  HIVE_BIFROST_ADMIN_TOKEN: {
+    description: "Bearer token for Bifrost /api/governance/* when provisioning sk-bf-* keys from the control plane",
+  },
   HIVE_JOIN_ALLOWED_ADAPTER_TYPES: { description: "Comma-separated adapter types for join" },
   HIVE_MANAGED_WORKER_URL_ALLOWLIST: { description: "Comma-separated URLs/hosts allowed for worker WebSocket link" },
   HIVE_PLACEMENT_V1_ENABLED: {
@@ -141,10 +148,13 @@ export const ENV_VAR_DOCS: Record<string, EnvVarDoc> = {
     description:
       "Optional inline PEM or base64-encoded PEM for Ed25519 manifest signing (prefer _SIGNING_KEY_FILE in production)",
   },
-  HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS: {
+  HIVE_WORKER_JWT_SECRET: {
     description:
-      "Comma-separated action ids enabled for POST /api/worker-tools/bridge (agent auth); empty disables the bridge",
+      "HS256 secret for drone worker-instance JWT (`/api/worker-api/*`, WebSocket worker_api_token); omit to disable",
   },
+  HIVE_WORKER_JWT_TTL_SECONDS: { description: "Worker JWT TTL in seconds (default 86400)" },
+  HIVE_WORKER_JWT_ISSUER: { description: "Worker JWT issuer claim" },
+  HIVE_WORKER_JWT_AUDIENCE: { description: "Worker JWT audience claim" },
   HIVE_GITHUB_TOKEN: {
     description: "Optional PAT for GitHub API (worker downloads / rate limits / private repo)",
   },
@@ -155,6 +165,10 @@ export const ENV_VAR_DOCS: Record<string, EnvVarDoc> = {
   HIVE_SERVER_PORT: { description: "Server port (E2E/test)" },
   HIVE_E2E_PORT: { description: "E2E test port" },
   HIVE_E2E_SKIP_LLM: { description: "Skip LLM in E2E" },
+  HIVE_E2E_MCP_MATERIALIZE_SECRET: {
+    description:
+      "When set in local_trusted, enables POST /api/e2e/mcp-smoke/materialize with header X-Hive-E2E-MCP-Secret (Playwright MCP smoke only; do not set in production)",
+  },
   HIVE_MIGRATION_PROMPT: { description: "Prompt before applying migrations" },
   HIVE_MIGRATION_AUTO_APPLY: { description: "Auto-apply migrations" },
   HIVE_IN_WORKTREE: { description: "Running inside a worktree" },
@@ -182,6 +196,17 @@ export const ENV_VAR_DOCS: Record<string, EnvVarDoc> = {
   ANTHROPIC_API_KEY: { description: "Passthrough: Anthropic API key for adapters" },
   OPENAI_API_KEY: { description: "Passthrough: OpenAI API key for adapters" },
   HIVE_WORKSPACE_CWD: { description: "Passthrough: workspace CWD for agents" },
+  HIVE_MCP_INDEXER_HTTP_TIMEOUT_MS: {
+    description: "hive-worker: HTTP timeout ms for MCP indexer gateway (default 90000, max 600000)",
+  },
+  HIVE_MCP_INDEXER_CB_FAILURES: {
+    description: "hive-worker: consecutive failures before indexer circuit opens; 0 disables (default 5)",
+  },
+  HIVE_MCP_INDEXER_CB_OPEN_MS: { description: "hive-worker: indexer circuit cooldown ms (default 30000)" },
+  DOCINDEX_MCP_WORKER_SAFE: {
+    description: "DocIndex: when 1/true, block admin MCP tools for worker-tier URLs (shared blocklist)",
+  },
+  DOCINDEX_MCP_BLOCKLIST_FILE: { description: "DocIndex: path to blocklist.json override (docindex key)" },
 };
 
 /** Env keys we parse and type (server/CLI config). */
@@ -239,6 +264,8 @@ export const PARSED_ENV_KEYS = [
   "RUN_LOG_BASE_PATH",
   "HIVE_ATTACHMENT_MAX_BYTES",
   "HIVE_ALLOWED_ATTACHMENT_TYPES",
+  "HIVE_BIFROST_ADMIN_BASE_URL",
+  "HIVE_BIFROST_ADMIN_TOKEN",
   "HIVE_JOIN_ALLOWED_ADAPTER_TYPES",
   "HIVE_MANAGED_WORKER_URL_ALLOWLIST",
   "HIVE_PLACEMENT_V1_ENABLED",
@@ -259,7 +286,10 @@ export const PARSED_ENV_KEYS = [
   "HIVE_WORKER_PROVISION_MANIFEST_FILE",
   "HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY_FILE",
   "HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY",
-  "HIVE_WORKER_TOOL_BRIDGE_ALLOWED_ACTIONS",
+  "HIVE_WORKER_JWT_SECRET",
+  "HIVE_WORKER_JWT_TTL_SECONDS",
+  "HIVE_WORKER_JWT_ISSUER",
+  "HIVE_WORKER_JWT_AUDIENCE",
   "HIVE_GITHUB_TOKEN",
   "HIVE_AGENT_JWT_TTL_SECONDS",
   "HIVE_AGENT_JWT_ISSUER",
@@ -268,6 +298,7 @@ export const PARSED_ENV_KEYS = [
   "HIVE_SERVER_PORT",
   "HIVE_E2E_PORT",
   "HIVE_E2E_SKIP_LLM",
+  "HIVE_E2E_MCP_MATERIALIZE_SECRET",
   "HIVE_MIGRATION_PROMPT",
   "HIVE_MIGRATION_AUTO_APPLY",
   "HIVE_IN_WORKTREE",
@@ -302,6 +333,12 @@ export const PASSTHROUGH_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "HIVE_WORKSPACE_CWD",
+  "HIVE_MCP_INDEXER_HTTP_TIMEOUT_MS",
+  "HIVE_MCP_INDEXER_CB_FAILURES",
+  "HIVE_MCP_INDEXER_CB_OPEN_MS",
+  "DOCINDEX_MCP_WORKER_SAFE",
+  "DOCINDEX_MCP_BLOCKLIST_FILE",
+  "HIVE_E2E_HIVE_WORKER_BINARY",
 ] as const;
 
 /** All keys allowed in process.env when strictUnknown is true. */

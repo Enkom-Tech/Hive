@@ -1,0 +1,4 @@
+{
+  "cocoindex": ["delete_repo", "force_reindex", "index_repository"],
+  "docindex": ["force_reindex", "index_documents"]
+}

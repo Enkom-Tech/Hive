@@ -1,0 +1,25 @@
+# Replace bucket URL and keys; metaurl password must match dragonfly-auth when using in-cluster Dragonfly.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: juicefs-sc
+provisioner: csi.juicefs.com
+parameters:
+  csi.storage.k8s.io/provisioner-secret-name: juicefs-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: hive-storage
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: juicefs-secret
+  namespace: hive-storage
+stringData:
+  name: hive-fs
+  metaurl: "redis://:changeme-dragonfly@dragonfly.hive-storage.svc.cluster.local:6379/1"
+  storage: "s3"
+  bucket: "https://s3.amazonaws.com/REPLACE_BUCKET"
+  access-key: "REPLACE_ACCESS_KEY"
+  secret-key: "REPLACE_SECRET_KEY"
