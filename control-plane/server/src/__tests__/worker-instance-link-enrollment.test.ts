@@ -94,7 +94,7 @@ describe("POST /api/companies/:companyId/worker-instances/:workerInstanceId/link
     expect(createWorkerInstanceLinkEnrollmentToken).not.toHaveBeenCalled();
   });
 
-  it("returns 403 when unauthenticated (board required)", async () => {
+  it("returns 403 when unauthenticated (assertBoard before session checks)", async () => {
     const app = createRouteTestApp({
       router: apiRouter(),
       principal: null,

@@ -13,6 +13,7 @@ import { createHelmet, permissionsPolicyMiddleware } from "./middleware/helmet-c
 import { createPrincipalMiddleware } from "./middleware/auth.js";
 import { issueBoardJwt } from "./auth/board-jwt.js";
 import { getCurrentPrincipal } from "./auth/principal.js";
+import { LOCAL_BOARD_USER_ID } from "./board-claim.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { createAuthenticatedSignUpGateMiddleware } from "./middleware/sign-up-gate.js";
@@ -44,10 +45,14 @@ import { releaseRoutes } from "./routes/releases.js";
 import { workerDownloadsRoutes } from "./routes/worker-downloads.js";
 import { workerApiRoutes } from "./routes/worker-api.js";
 import { internalHiveRoutes } from "./routes/internal-hive.js";
+import { pluginHostRoutes } from "./routes/plugin-host.js";
+import { pluginBoardRoutes } from "./routes/plugins.js";
+import { registerGithubWebhookBeforeJson } from "./routes/integrations-github.js";
 import { e2eMcpSmokeRoutes } from "./routes/e2e-mcp-smoke.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { initPlacementPrometheus, renderPlacementPrometheusScrape } from "./placement-metrics.js";
 import { workerApiMetricsMiddleware } from "./middleware/worker-api-metrics.js";
+import { startPluginSupervisorRuntime } from "./services/plugin-supervisor.js";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 
 type UiMode = "none" | "static" | "vite-dev";
@@ -92,6 +97,10 @@ export async function createApp(
     metricsEnabled: boolean;
     /** ADR 005 Phase C: auto-evacuate automatic bindings when a drone is marked draining. */
     drainAutoEvacuateEnabled: boolean;
+    drainCancelInFlightPlacementsEnabled: boolean;
+    vcsGitHubWebhookEnabled: boolean;
+    vcsGitHubWebhookSecret: string | undefined;
+    vcsGitHubAllowedRepos: string[] | undefined;
     workerIdentityAutomationEnabled?: boolean;
     /** Preferred public API origin for generated drone automation profiles (optional; routes may fall back to request Host). */
     apiPublicBaseUrl?: string;
@@ -100,6 +109,7 @@ export async function createApp(
     workerProvisionManifestSigningKeyPem?: string;
     /** Enables POST /api/internal/hive/inference-metering (router → ledger). */
     internalHiveOperatorSecret?: string;
+    pluginHostSecret?: string;
     /**
      * When set with deploymentMode local_trusted, enables POST /api/e2e/mcp-smoke/materialize
      * (X-Hive-E2E-MCP-Secret) for Playwright MCP → worker-api smoke only.
@@ -148,6 +158,11 @@ export async function createApp(
     }),
   );
   app.use(permissionsPolicyMiddleware);
+  registerGithubWebhookBeforeJson(app, db, {
+    enabled: opts.vcsGitHubWebhookEnabled,
+    secret: opts.vcsGitHubWebhookSecret,
+    allowedRepos: opts.vcsGitHubAllowedRepos,
+  });
   app.use(express.json());
   app.use(httpLogger);
 
@@ -193,7 +208,8 @@ export async function createApp(
       /^\/worker-downloads\/provision-manifest/.test(path) ||
       /^\/companies\/[^/]+\/worker-runtime\/manifest$/.test(path) ||
       /^\/worker-pairing\//.test(path) ||
-      /^\/invites\/[^/]+\/accept/.test(path);
+      /^\/invites\/[^/]+\/accept/.test(path) ||
+      /^\/internal\/plugin-host\//.test(path);
     if (isSensitive) return sensitiveLimiter(req, res, next);
     return apiLimiter(req, res, next);
   });
@@ -218,6 +234,7 @@ export async function createApp(
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
+    const isLocalBoard = principal.id === LOCAL_BOARD_USER_ID || principal.type === "system";
     const payload: Record<string, unknown> = {
       session: {
         id: `hive:${principal.type}:${principal.id}`,
@@ -225,8 +242,8 @@ export async function createApp(
       },
       user: {
         id: principal.id,
-        email: null,
-        name: principal.type === "system" ? "Local Board" : null,
+        email: isLocalBoard ? "local@hive.local" : null,
+        name: isLocalBoard ? "Local Board" : null,
       },
     };
     if (principal.type === "user" && principal.company_ids && principal.roles) {
@@ -295,6 +312,12 @@ export async function createApp(
       internalHiveRoutes(db, { operatorSecret: opts.internalHiveOperatorSecret.trim() }),
     );
   }
+  if (opts.pluginHostSecret?.trim()) {
+    api.use(
+      "/internal/plugin-host",
+      pluginHostRoutes(db, { hostSecret: opts.pluginHostSecret.trim() }),
+    );
+  }
   if (
     opts.deploymentMode === "local_trusted" &&
     opts.e2eMcpSmokeMaterializeSecret?.trim()
@@ -318,6 +341,7 @@ export async function createApp(
     "/companies",
     companyRoutes(db, {
       drainAutoEvacuateEnabled: opts.drainAutoEvacuateEnabled,
+      drainCancelInFlightPlacementsEnabled: opts.drainCancelInFlightPlacementsEnabled,
       workerIdentityAutomationEnabled: opts.workerIdentityAutomationEnabled ?? true,
       apiPublicBaseUrl: opts.apiPublicBaseUrl,
       workerProvisionManifestJson: opts.workerProvisionManifestJson,
@@ -344,6 +368,7 @@ export async function createApp(
   api.use(webhookDeliveryRoutes(db));
   api.use(connectRoutes(db, { authPublicBaseUrl: opts.authPublicBaseUrl }));
   api.use(sidebarBadgeRoutes(db));
+  api.use(pluginBoardRoutes(db));
   api.use(
     accessRoutes(db, {
       deploymentMode: opts.deploymentMode,
@@ -460,6 +485,8 @@ export async function createApp(
   }
 
   app.use(errorHandler);
+
+  startPluginSupervisorRuntime();
 
   return app;
 }

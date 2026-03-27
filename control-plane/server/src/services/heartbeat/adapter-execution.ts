@@ -435,6 +435,12 @@ export function createAdapterExecution(deps: AdapterExecutionDeps) {
       issue: issueRef,
       agent: { id: agent.id, name: agent.name, companyId: agent.companyId },
     });
+    if (issueId && executionWorkspace.branchName) {
+      await db
+        .update(issues)
+        .set({ executionWorkspaceBranch: executionWorkspace.branchName, updatedAt: new Date() })
+        .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)));
+    }
     const runtimeSessionResolution = resolveRuntimeSessionParamsForWorkspace({
       agentId: agent.id,
       previousSessionParams,

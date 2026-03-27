@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -150,20 +151,22 @@ type openAIUsage struct {
 	CompletionTokens int `json:"completion_tokens"`
 }
 
-func postMeteringAsync(url, bearer, companyID, modelID string, inTok, outTok int) {
+func postMeteringAsync(url, bearer, companyID, modelID string, inTok, outTok int, responseBodyHash string) {
 	if url == "" || companyID == "" {
 		return
 	}
+	idem := sha256Hex(companyID + "|" + modelID + "|" + fmt.Sprintf("%d|%d|", inTok, outTok) + responseBodyHash)
 	body := map[string]any{
-		"companyId":     companyID,
-		"source":        "gateway_aggregate",
-		"agentId":       nil,
-		"provider":      "model_gateway",
-		"model":         modelID,
-		"inputTokens":   inTok,
-		"outputTokens":  outTok,
-		"costCents":     0,
-		"occurredAt":    time.Now().UTC().Format(time.RFC3339Nano),
+		"companyId":      companyID,
+		"source":         "gateway_aggregate",
+		"agentId":        nil,
+		"provider":       "model_gateway",
+		"model":          modelID,
+		"inputTokens":    inTok,
+		"outputTokens":   outTok,
+		"costCents":      0,
+		"occurredAt":     time.Now().UTC().Format(time.RFC3339Nano),
+		"idempotencyKey": idem,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -327,7 +330,7 @@ func main() {
 				Usage openAIUsage `json:"usage"`
 			}
 			if err := json.Unmarshal(upBody, &wrapped); err == nil {
-				go postMeteringAsync(meterURL, meterBearer, meteringCompany, modelID, wrapped.Usage.PromptTokens, wrapped.Usage.CompletionTokens)
+				go postMeteringAsync(meterURL, meterBearer, meteringCompany, modelID, wrapped.Usage.PromptTokens, wrapped.Usage.CompletionTokens, sha256Hex(string(upBody)))
 			}
 		}
 		if ct != "" {

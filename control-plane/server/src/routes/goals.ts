@@ -3,7 +3,7 @@ import type { Db } from "@hive/db";
 import { createGoalSchema, updateGoalSchema } from "@hive/shared";
 import { validate } from "../middleware/validate.js";
 import { goalService, logActivity } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "./authz.js";
 
 export function goalRoutes(db: Db) {
   const router = Router();
@@ -11,7 +11,7 @@ export function goalRoutes(db: Db) {
 
   router.get("/companies/:companyId/goals", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const result = await svc.list(companyId);
     res.json(result);
   });
@@ -23,13 +23,13 @@ export function goalRoutes(db: Db) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-    assertCompanyAccess(req, goal.companyId);
+    await assertCompanyRead(db, req, goal.companyId);
     res.json(goal);
   });
 
   router.post("/companies/:companyId/goals", validate(createGoalSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "goals:write");
     const goal = await svc.create(companyId, req.body);
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -52,7 +52,7 @@ export function goalRoutes(db: Db) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "goals:write");
     const goal = await svc.update(id, req.body);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });
@@ -81,7 +81,7 @@ export function goalRoutes(db: Db) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "goals:write");
     const goal = await svc.remove(id);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });

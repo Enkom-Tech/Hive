@@ -59,6 +59,7 @@ export {
   JOIN_REQUEST_STATUSES,
   AUTH_PROVIDERS,
   PERMISSION_KEYS,
+  COMPANY_MEMBERSHIP_ROLES,
   type AuthProvider,
   type CompanyStatus,
   type DeploymentMode,
@@ -98,6 +99,13 @@ export {
   type JoinRequestStatus,
   type PermissionKey,
 } from "./constants.js";
+
+export {
+  roleAllowsPermission,
+  permissionKeysForRolePreset,
+  isCompanyMembershipRole,
+  type CompanyMembershipRole,
+} from "./rbac/role-presets.js";
 
 export type {
   Company,
@@ -363,6 +371,7 @@ export {
 } from "./validators/index.js";
 
 export { API_PREFIX, API } from "./api.js";
+export { isDigestPinnedImageRef } from "./deploy-image-ref.js";
 export { normalizeAgentUrlKey, deriveAgentUrlKey, isUuidLike } from "./agent-url-key.js";
 export { deriveProjectUrlKey, normalizeProjectUrlKey } from "./project-url-key.js";
 export {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { Db } from "@hive/db";
 import { standupService } from "../services/standup.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertCompanyRead } from "./authz.js";
 
 export function standupRoutes(db: Db) {
   const router = Router();
@@ -9,7 +9,7 @@ export function standupRoutes(db: Db) {
 
   router.get("/companies/:companyId/standup", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const report = await svc.getReport(companyId);
     res.json(report);
   });

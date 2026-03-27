@@ -1,11 +1,13 @@
 import type { Request } from "express";
+import type { Db } from "@hive/db";
 import { optionalCompanyIdQuerySchema, isUuidLike } from "@hive/shared";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../../errors.js";
 import { getCurrentPrincipal } from "../../auth/principal.js";
-import { assertCompanyAccess } from "../authz.js";
+import { assertCompanyRead } from "../authz.js";
 import type { accessService, agentService } from "../../services/index.js";
 
 export type AgentRoutesCommonDeps = {
+  db: Db;
   access: ReturnType<typeof accessService>;
   agentService: ReturnType<typeof agentService>;
 };
@@ -23,7 +25,7 @@ export async function assertCanCreateAgentsForCompany(
   companyId: string,
   deps: AgentRoutesCommonDeps,
 ): Promise<{ id: string; companyId: string } | null> {
-  assertCompanyAccess(req, companyId);
+  await assertCompanyRead(deps.db, req, companyId);
   const p = getCurrentPrincipal(req);
   const isBoard = p?.type === "user" || p?.type === "system";
   if (isBoard) {
@@ -64,7 +66,7 @@ export async function actorCanReadConfigurationsForCompany(
   companyId: string,
   deps: AgentRoutesCommonDeps,
 ): Promise<boolean> {
-  assertCompanyAccess(req, companyId);
+  await assertCompanyRead(deps.db, req, companyId);
   const p = getCurrentPrincipal(req);
   const isBoard = p?.type === "user" || p?.type === "system";
   if (isBoard) {
@@ -88,10 +90,15 @@ export async function assertCanUpdateAgent(
   targetAgent: { id: string; companyId: string },
   deps: AgentRoutesCommonDeps,
 ): Promise<void> {
-  assertCompanyAccess(req, targetAgent.companyId);
+  await assertCompanyRead(deps.db, req, targetAgent.companyId);
   const p = getCurrentPrincipal(req);
   const isBoard = p?.type === "user" || p?.type === "system";
-  if (isBoard) return;
+  if (isBoard) {
+    if (p?.type === "system" || p?.roles?.includes("instance_admin")) return;
+    const allowed = await deps.access.canUser(targetAgent.companyId, p?.id ?? "", "agents:create");
+    if (!allowed) throw forbidden("Missing permission: agents:create");
+    return;
+  }
   if (p?.type !== "agent" || !p.id) throw forbidden("Agent authentication required");
 
   const actorAgent = await deps.agentService.getById(p.id);
@@ -111,14 +118,14 @@ export async function assertCanUpdateAgent(
   throw forbidden("Only CEO or agent creators can modify other agents");
 }
 
-export async function resolveCompanyIdForAgentReference(req: Request): Promise<string | null> {
+export async function resolveCompanyIdForAgentReference(req: Request, db: Db): Promise<string | null> {
   const parsed = optionalCompanyIdQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     throw badRequest("Invalid query", parsed.error.issues);
   }
   const requestedCompanyId = parsed.data.companyId ?? null;
   if (requestedCompanyId) {
-    assertCompanyAccess(req, requestedCompanyId);
+    await assertCompanyRead(db, req, requestedCompanyId);
     return requestedCompanyId;
   }
   const p = getCurrentPrincipal(req);
@@ -136,7 +143,7 @@ export async function normalizeAgentReference(
   const raw = rawId.trim();
   if (isUuidLike(raw)) return raw;
 
-  const companyId = await resolveCompanyIdForAgentReference(req);
+  const companyId = await resolveCompanyIdForAgentReference(req, deps.db);
   if (!companyId) {
     throw unprocessable("Agent shortname lookup requires companyId query parameter");
   }

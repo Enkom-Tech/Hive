@@ -88,7 +88,10 @@ func PostLLMHook(ctx *schemas.BifrostContext, resp *schemas.BifrostResponse, bif
 		if err != nil {
 			return
 		}
-		_ = c.PostGatewayAggregate(bg, companyID, model, inTok, outTok, costCents)
+		idemRaw := fmt.Sprintf("%s|%s|%d|%d|%d", keyHash, model, inTok, outTok, costCents)
+		idemSum := sha256.Sum256([]byte(idemRaw))
+		idem := hex.EncodeToString(idemSum[:])
+		_ = c.PostGatewayAggregate(bg, companyID, model, inTok, outTok, costCents, idem)
 	}()
 	return resp, bifrostErr, nil
 }

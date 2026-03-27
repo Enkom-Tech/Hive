@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@hive/db";
-import { agentApiKeys, companyMemberships, instanceUserRoles } from "@hive/db";
+import { agentApiKeys, instanceUserRoles } from "@hive/db";
 import type { DeploymentMode } from "@hive/shared";
+import { accessService } from "../services/access.js";
 
 export interface CompanyEventsContext {
   companyId: string;
@@ -70,26 +71,23 @@ export async function authorizeCompanyEventsAccess(
   }
 
   const userId = sessionUserId;
-  const [roleRow, memberships] = await Promise.all([
-    db
-      .select({ id: instanceUserRoles.id })
-      .from(instanceUserRoles)
-      .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
-      .then((rows) => rows[0] ?? null),
-    db
-      .select({ companyId: companyMemberships.companyId })
-      .from(companyMemberships)
-      .where(
-        and(
-          eq(companyMemberships.principalType, "user"),
-          eq(companyMemberships.principalId, userId),
-          eq(companyMemberships.status, "active"),
-        ),
-      ),
-  ]);
+  const roleRow = await db
+    .select({ id: instanceUserRoles.id })
+    .from(instanceUserRoles)
+    .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+    .then((rows) => rows[0] ?? null);
 
-  const hasCompanyMembership = memberships.some((row) => row.companyId === companyId);
-  if (!roleRow && !hasCompanyMembership) return null;
+  if (roleRow) {
+    return {
+      companyId,
+      actorType: "board",
+      actorId: userId,
+    };
+  }
+
+  const access = accessService(db);
+  const canRead = await access.canUser(companyId, userId, "company:read");
+  if (!canRead) return null;
 
   return {
     companyId,

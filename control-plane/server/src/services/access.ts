@@ -7,7 +7,9 @@ import {
   principalPermissionGrants,
 } from "@hive/db";
 import type { PermissionKey, PrincipalType } from "@hive/shared";
+import { roleAllowsPermission } from "@hive/shared";
 import { LOCAL_BOARD_USER_ID } from "../board-claim.js";
+import { isAssigneeAllowedByAgentScope } from "./assign-scope.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -52,6 +54,7 @@ export function accessService(db: Db) {
   ): Promise<boolean> {
     const membership = await getMembership(companyId, principalType, principalId);
     if (!membership || membership.status !== "active") return false;
+
     const grant = await db
       .select({ id: principalPermissionGrants.id })
       .from(principalPermissionGrants)
@@ -64,7 +67,17 @@ export function accessService(db: Db) {
         ),
       )
       .then((rows) => rows[0] ?? null);
-    return Boolean(grant);
+    if (grant) return true;
+
+    if (
+      (principalType === "user" || principalType === "agent") &&
+      membership.membershipRole &&
+      roleAllowsPermission(membership.membershipRole, permissionKey)
+    ) {
+      return true;
+    }
+
+    return false;
   }
 
   async function listPrincipalDepartmentIds(
@@ -248,7 +261,7 @@ export function accessService(db: Db) {
           principalType: "user",
           principalId: userId,
           status: "active",
-          membershipRole: "member",
+          membershipRole: "operator",
         });
       }
     });
@@ -260,15 +273,16 @@ export function accessService(db: Db) {
     companyId: string,
     principalType: PrincipalType,
     principalId: string,
-    membershipRole: string | null = "member",
+    membershipRole: string | null = "operator",
     status: "pending" | "active" | "suspended" = "active",
   ) {
+    const role = membershipRole ?? "operator";
     const existing = await getMembership(companyId, principalType, principalId);
     if (existing) {
-      if (existing.status !== status || existing.membershipRole !== membershipRole) {
+      if (existing.status !== status || existing.membershipRole !== role) {
         const updated = await db
           .update(companyMemberships)
-          .set({ status, membershipRole, updatedAt: new Date() })
+          .set({ status, membershipRole: role, updatedAt: new Date() })
           .where(eq(companyMemberships.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? null);
@@ -284,7 +298,7 @@ export function accessService(db: Db) {
         principalType,
         principalId,
         status,
-        membershipRole,
+        membershipRole: role,
       })
       .returning()
       .then((rows) => rows[0]);
@@ -323,10 +337,49 @@ export function accessService(db: Db) {
     });
   }
 
+  async function grantScopeForPermission(
+    companyId: string,
+    principalType: PrincipalType,
+    principalId: string,
+    permissionKey: PermissionKey,
+  ): Promise<Record<string, unknown> | null> {
+    const row = await db
+      .select({ scope: principalPermissionGrants.scope })
+      .from(principalPermissionGrants)
+      .where(
+        and(
+          eq(principalPermissionGrants.companyId, companyId),
+          eq(principalPermissionGrants.principalType, principalType),
+          eq(principalPermissionGrants.principalId, principalId),
+          eq(principalPermissionGrants.permissionKey, permissionKey),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+    return row?.scope ?? null;
+  }
+
+  async function canPrincipalAssignAgent(
+    companyId: string,
+    principalType: PrincipalType,
+    principalId: string,
+    assigneeAgentId: string,
+  ): Promise<boolean> {
+    if (await hasPermission(companyId, principalType, principalId, "tasks:assign")) return true;
+    if (!(await hasPermission(companyId, principalType, principalId, "tasks:assign_scope"))) return false;
+    const scope = await grantScopeForPermission(
+      companyId,
+      principalType,
+      principalId,
+      "tasks:assign_scope",
+    );
+    return isAssigneeAllowedByAgentScope(db, companyId, assigneeAgentId, scope);
+  }
+
   return {
     isInstanceAdmin,
     canUser,
     hasPermission,
+    canPrincipalAssignAgent,
     listPrincipalDepartmentIds,
     isPrincipalInDepartment,
     canAssignPrincipalToIssueDepartment,

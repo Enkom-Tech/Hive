@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNotNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { agents, heartbeatRuns, runPlacements, workerInstanceAgents, workerInstances } from "@hive/db";
 import { workerInstanceLabelsAllowSandboxPosture } from "./worker-assignment/sandbox-labels.js";
@@ -219,6 +219,27 @@ export async function markRunPlacementTerminalCompleted(db: Db, heartbeatRunId: 
       and(
         eq(runPlacements.heartbeatRunId, heartbeatRunId),
         eq(runPlacements.state, "active"),
+      ),
+    );
+}
+
+/** Runs tied to this worker instance with pending/active placement and non-terminal heartbeat status. */
+export async function listPlacedHeartbeatRunsForWorkerInstance(
+  db: Db,
+  workerInstanceId: string,
+): Promise<{ heartbeatRunId: string; agentId: string }[]> {
+  return db
+    .select({
+      heartbeatRunId: runPlacements.heartbeatRunId,
+      agentId: runPlacements.agentId,
+    })
+    .from(runPlacements)
+    .innerJoin(heartbeatRuns, eq(runPlacements.heartbeatRunId, heartbeatRuns.id))
+    .where(
+      and(
+        eq(runPlacements.workerInstanceId, workerInstanceId),
+        inArray(runPlacements.state, ["pending", "active"]),
+        inArray(heartbeatRuns.status, ["queued", "running"]),
       ),
     );
 }

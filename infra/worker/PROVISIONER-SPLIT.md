@@ -1,5 +1,7 @@
 # External provisioner vs in-process hooks
 
+**Scope:** A future **policy-driven provisioner** (control plane pushes image allowlists, sandbox defaults, and lazy URLs over the WebSocket or a dedicated API) is **not on the roadmap for this document**. Today operators use **per-adapter env** (`HIVE_ADAPTER_*`), **company manifest** HTTP fetch, and **external** init Jobs/sidecars as below. See [DRONE-SPEC.md](../../control-plane/doc/DRONE-SPEC.md) §10 (provisioning row).
+
 `hive-worker` can install adapter runtimes in two ways:
 
 1. **In-process (optional):** `HIVE_PROVISION_MANIFEST_HOOKS=1` runs `apt` / `npm` / `docker` at startup from the provision manifest. Requires a **non-distroless** image with those tools on `PATH` (see [`Dockerfile`](Dockerfile)).

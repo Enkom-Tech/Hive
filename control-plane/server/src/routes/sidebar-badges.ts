@@ -6,7 +6,7 @@ import { sidebarBadgeService } from "../services/sidebar-badges.js";
 import { accessService } from "../services/access.js";
 import { dashboardService } from "../services/dashboard.js";
 import { getCurrentPrincipal } from "../auth/principal.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertCompanyRead } from "./authz.js";
 
 export function sidebarBadgeRoutes(db: Db) {
   const router = Router();
@@ -16,7 +16,7 @@ export function sidebarBadgeRoutes(db: Db) {
 
   router.get("/companies/:companyId/sidebar-badges", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const p = getCurrentPrincipal(req);
     let canApproveJoins = false;
     if (p?.type === "user" || p?.type === "system") {
@@ -28,13 +28,11 @@ export function sidebarBadgeRoutes(db: Db) {
       canApproveJoins = await access.hasPermission(companyId, "agent", p.id, "joins:approve");
     }
 
-    const joinRequestCount = canApproveJoins
-      ? await db
-        .select({ count: sql<number>`count(*)` })
-        .from(joinRequests)
-        .where(and(eq(joinRequests.companyId, companyId), eq(joinRequests.status, "pending_approval")))
-        .then((rows) => Number(rows[0]?.count ?? 0))
-      : 0;
+    const joinRequestCount = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(joinRequests)
+      .where(and(eq(joinRequests.companyId, companyId), eq(joinRequests.status, "pending_approval")))
+      .then((rows) => Number(rows[0]?.count ?? 0));
 
     const badges = await svc.get(companyId, {
       joinRequests: joinRequestCount,
@@ -46,7 +44,7 @@ export function sidebarBadgeRoutes(db: Db) {
       (summary.costs.monthBudgetCents > 0 && summary.costs.monthUtilizationPercent >= 80 ? 1 : 0);
     badges.inbox = badges.failedRuns + alertsCount + joinRequestCount + badges.approvals;
 
-    res.json(badges);
+    res.json({ ...badges, canApproveJoinRequests: canApproveJoins });
   });
 
   return router;

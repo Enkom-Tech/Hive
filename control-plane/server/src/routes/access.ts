@@ -50,7 +50,7 @@ import {
 } from "../services/index.js";
 import { assertAdapterTypeAllowed, validateAdapterConfig } from "../adapters/index.js";
 import { redactEventPayload } from "../redaction.js";
-import { assertCompanyAccess } from "./authz.js";
+import { assertCompanyAccess, assertCompanyPermission, assertCompanyRead } from "./authz.js";
 import {
   claimBoardOwnership,
   inspectBoardClaimChallenge
@@ -1007,34 +1007,6 @@ export function accessRoutes(
     throw conflict("Board claim challenge is no longer available");
   });
 
-  async function assertCompanyPermission(
-    req: Request,
-    companyId: string,
-    permissionKey: any
-  ) {
-    assertCompanyAccess(req, companyId);
-    const p = getCurrentPrincipal(req);
-    if (p?.type === "agent") {
-      if (!p.id) throw forbidden();
-      const allowed = await access.hasPermission(
-        companyId,
-        "agent",
-        p.id,
-        permissionKey
-      );
-      if (!allowed) throw forbidden("Permission denied");
-      return;
-    }
-    if (p?.type !== "user" && p?.type !== "system") throw unauthorized();
-    if (isLocalImplicit(req)) return;
-    const allowed = await access.canUser(
-      companyId,
-      p?.id ?? "",
-      permissionKey
-    );
-    if (!allowed) throw forbidden("Permission denied");
-  }
-
   async function createCompanyInviteForCompany(input: {
     req: Request;
     companyId: string;
@@ -1111,7 +1083,7 @@ export function accessRoutes(
     validate(createCompanyInviteSchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      await assertCompanyPermission(req, companyId, "users:invite");
+      await assertCompanyPermission(db, req, companyId, "users:invite");
       const { token, created, normalizedAgentMessage } =
         await createCompanyInviteForCompany({
           req,
@@ -1591,7 +1563,7 @@ export function accessRoutes(
       await assertInstanceAdmin(req);
     } else {
       if (!invite.companyId) throw conflict("Invite is missing company scope");
-      await assertCompanyPermission(req, invite.companyId, "users:invite");
+      await assertCompanyPermission(db, req, invite.companyId, "users:invite");
     }
     if (invite.acceptedAt) throw conflict("Invite already consumed");
     if (invite.revokedAt) return res.json(invite);
@@ -1623,7 +1595,7 @@ export function accessRoutes(
 
   router.get("/companies/:companyId/join-requests", async (req, res) => {
     const companyId = req.params.companyId as string;
-    await assertCompanyPermission(req, companyId, "joins:approve");
+    await assertCompanyRead(db, req, companyId);
     const parsed = listJoinRequestsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -1649,7 +1621,7 @@ export function accessRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       const requestId = req.params.requestId as string;
-      await assertCompanyPermission(req, companyId, "joins:approve");
+      await assertCompanyPermission(db, req, companyId, "joins:approve");
 
       const existing = await db
         .select()
@@ -1817,7 +1789,7 @@ export function accessRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       const requestId = req.params.requestId as string;
-      await assertCompanyPermission(req, companyId, "joins:approve");
+      await assertCompanyPermission(db, req, companyId, "joins:approve");
 
       const existing = await db
         .select()
@@ -1945,7 +1917,7 @@ export function accessRoutes(
 
   router.get("/companies/:companyId/members", async (req, res) => {
     const companyId = req.params.companyId as string;
-    await assertCompanyPermission(req, companyId, "users:manage_permissions");
+    await assertCompanyPermission(db, req, companyId, "users:manage_permissions");
     const members = await access.listMembers(companyId);
     res.json(members);
   });
@@ -1956,7 +1928,7 @@ export function accessRoutes(
     async (req, res) => {
       const companyId = req.params.companyId as string;
       const memberId = req.params.memberId as string;
-      await assertCompanyPermission(req, companyId, "users:manage_permissions");
+      await assertCompanyPermission(db, req, companyId, "users:manage_permissions");
       const updated = await access.setMemberPermissions(
         companyId,
         memberId,

@@ -179,7 +179,7 @@ For parallel work on the same project, each run MAY get a distinct workspace (e.
 
 The drone MAY run each agent in a **container** (e.g. Docker, Podman, or a micro VM) or equivalent **sandbox** so that the agent process has access only to an explicitly mounted workspace (and any other allowed mounts). When used, this provides OS-level isolation: the agent cannot see or modify the rest of the host. When not used, the agent runs as a normal process on the host (current behavior). The spec does not require container isolation; it is an optional implementation choice per deployment or per run (e.g. configurable via run request or drone config). When container isolation is used, only the workspace directory (and any explicitly configured mounts) SHALL be visible to the agent process.
 
-Current implementation: optional per-adapter. Set `HIVE_ADAPTER_<key>_CONTAINER=1` and `HIVE_ADAPTER_<key>_IMAGE=<image>` to run that adapter in a container. The drone invokes the container runtime (`docker` or `HIVE_CONTAINER_RUNTIME`) with `--rm`, `-v <workspace>:/workspace`, `-w /workspace`, and HIVE_* env vars; image and command come from operator config only. There is no policy from the control plane today; isolation is per-adapter env only.
+Current implementation: optional per-adapter. Set `HIVE_ADAPTER_<key>_CONTAINER=1` and `HIVE_ADAPTER_<key>_IMAGE=<image>` to run that adapter in a container. The drone invokes the container runtime (`docker` or `HIVE_CONTAINER_RUNTIME`) with `--rm`, `-v <workspace>:/workspace`, `-w /workspace`, and HIVE_* env vars; image and command come from operator config only. There is no per-run image policy from the control plane; operators SHOULD set **`HIVE_CONTAINER_IMAGE_ALLOWLIST`** to comma-separated registry/path prefixes and **`HIVE_CONTAINER_IMAGE_ENFORCE=true`** in production when the container adapter is enabled (see `internal/executor/container_allowlist.go`). **`deploy_grant`** pulls use the same allowlist/enforce rules before `docker pull`.
 
 ### Stop / cancel
 
@@ -227,6 +227,7 @@ Authoritative list for security review and PR gates: any new tool or HTTP action
 | `POST /api/worker-api/issues` | HTTPS | Worker JWT | Same + board parity (`createIssue` rules, assignee gates, department constraints, intent folding) | Issue + intent | shipped | `worker_api.issue_create` (+ intent activity) |
 | `PATCH /api/worker-api/issues/:id` | HTTPS | Worker JWT | Same + mutable-field allowlist (no `status`); `X-Hive-Run-Id` when editing checked-out `in_progress` assignee self | Issue fields | shipped | `worker_api.issue_update` |
 | `POST /api/worker-api/agent-hires` | HTTPS | Worker JWT | `agents:create` permission on acting agent; adapter validation; company approval policy for new agents | New agent / approval | shipped | `worker_api.agent_hire` |
+| `GET /api/worker-api/plugin-tools` | HTTPS | Worker JWT | Same; query `agentId` must be active in company | Plugin manifest tool names (`plugin:<packageKey>:<tool>`), no secrets | shipped | — |
 | `cost.report` (MCP) | stdio → above HTTP | JWT via drone (`CPClient`) | Injected `agentId` on worker | Same as cost-report | shipped | (via HTTP) |
 | `issue.appendComment` | stdio → HTTP | JWT | Same | Same | shipped | (via HTTP) |
 | `issue.transitionStatus` | stdio → HTTP | JWT | Same | Same | shipped | (via HTTP) |
@@ -258,13 +259,9 @@ Security-review addendum for **who** may trigger **which** HTTP action when usin
 
 **Shipped (board parity):** Issue **create** (`POST /api/worker-api/issues`, MCP `issue.create`), issue **patch** excluding **status** (`PATCH /api/worker-api/issues/:id`, MCP `issue.update`; status stays on `POST …/transition`), and **agent hire** (`POST /api/worker-api/agent-hires`, MCP `agent.requestHire`) via the same services and Zod shapes as the board — activity log, sensitive rate limits, and permission checks (`assign` / `agents:create` where applicable). **Create idempotency:** the same **intent folding** canonical key as the board still applies. **POST /api/worker-api/issues** also accepts optional **X-Hive-Worker-Idempotency-Key** (printable ASCII, max 128 chars; hive-worker MCP: issue.create idempotencyKey). The first successful **201** response for a given (company, agent, route, key) is stored and replayed on retries without duplicating activity, webhooks, or heartbeats.
 
-**Still deferred:**
+**request_deploy (optional, feature-flagged):** When enabled on control plane (`HIVE_REQUEST_DEPLOY_ENABLED`) and worker (`HIVE_REQUEST_DEPLOY_ENABLED`), board-approved **deploy grants** (digest-pinned image, allowlisted registry) may be delivered over the WebSocket link; the worker verifies the grant before pull. See [threat-model-request-deploy.md](plans/threat-model-request-deploy.md) and [ADR 006](../adr/006-request-deploy.md).
 
-| Capability | Rationale (why deferred) | Preconditions to ship |
-|------------|-------------------------|------------------------|
-| **request_deploy** (another agent/image) | Supply-chain and tenancy risk | Policy from control plane; signed artifacts; audit |
-
-Product shorthand: **request_deploy** covers automated deploy of another agent or image from the worker surface without a board-equivalent flow.
+Product shorthand: **request_deploy** covers automated pull/verify of another agent image from the worker surface **only** with a server-minted grant — not ad-hoc registry access.
 
 ## 8. Token efficiency and agent-facing format
 
@@ -284,24 +281,25 @@ Structured data returned to agents (e.g. MCP tool results, or CLI output that is
 
 ## 10. Current implementation vs spec (gaps)
 
-| Area | Implemented | Not implemented |
-|------|-------------|-----------------|
-| **Transport** | **WebSocket only** (target). Drone connects outbound to control plane; run/cancel/status/log over same link. | Current code may still use HTTP until migration. |
+| Area | Implemented | Gaps / follow-ups |
+|------|-------------|-------------------|
+| **Transport** | **Outbound WebSocket** from `infra/worker/internal/link` to `/api/workers/link`; `run`, `cancel`, `status`, `log`, `ack`, `hello`, `link_token`, `worker_api_token`. | None for primary path; legacy HTTP adapters outside this link are operator-specific. |
 | Run | WebSocket message `run` (agentId, runId, context, optional adapterKey, optional modelId); drone acks then spawns | — |
 | Concurrency | Parallel runs accepted | — |
-| Executor | One command with HIVE_AGENT_ID, HIVE_RUN_ID, HIVE_CONTEXT_JSON, HIVE_WORKSPACE | — |
-| Execution adapters | Registry from env (HIVE_ADAPTER_DEFAULT_CMD, HIVE_ADAPTER_<name>_CMD); adapterKey in payload selects executor; optional _URL (provisioning), _CONTAINER+_IMAGE (container) | — |
-| Status/log | WebSocket messages `status` (runId, **agentId**, status, exitCode?, error?, …), `log` (runId, **agentId**, stream, chunk, ts) | — |
-| Stop/cancel | WebSocket message `cancel` (runId); per-run context cancellation | Grace period / force-kill (optional follow-up) |
-| Install | — | One-liner install with token |
-| Provisioning | Lazy per-adapter from `HIVE_ADAPTER_<key>_URL` and/or `HIVE_PROVISION_MANIFEST_*`; optional startup hooks (`HIVE_PROVISION_MANIFEST_HOOKS=1`); company manifest `GET /api/companies/{id}/worker-runtime/manifest` | Richer policy-driven provisioner as separate component (optional) |
-| Tools/MCP | `hive-worker mcp` + `/api/worker-api/*` (worker JWT); optional gateway-proxied `code.*` / `documents.*`; WASM in `skills/`; issue create/update + agent hire on worker-api | `request_deploy` / image deploy for other agents via worker-api (deferred) |
-| Workspace | Single HIVE_WORKSPACE | Per-run workspace/tree |
-| Per-run container/sandbox | Optional per-adapter (HIVE_ADAPTER_<key>_CONTAINER, _IMAGE); docker run with workspace mount | Spec extends to policy-driven default-on and allowlisted images (not yet implemented) |
-| WebSocket auth | HIVE_CONTROL_PLANE_TOKEN or HIVE_API_KEY at connect (e.g. query param or first message) | — |
-| Agent-facing format | — | Minimal/TOON responses |
+| Executor | One command with HIVE_AGENT_ID, HIVE_RUN_ID, HIVE_CONTEXT_JSON; workspace from `HIVE_WORKSPACE` and/or `context.hiveWorkspace` (`cwd` / `worktreePath` under workspace root) | — |
+| Execution adapters | Registry from env; optional container adapter; **`EnforceContainerImagePolicy`** before `docker run` and before **`deploy_grant`** pull | Optional **`HIVE_CONTAINER_IMAGE_ENFORCE=true`** + allowlist for production; manifest-driven policy still future |
+| Status/log | WebSocket messages `status`, `log` with **agentId** on pool hosts | — |
+| Stop/cancel | WebSocket `cancel` → run context cancelled | **SIGTERM grace** then **SIGKILL** when `HIVE_CANCEL_GRACE_SECONDS` set |
+| Install | `infra/worker/scripts/install-hive-worker.sh` (checksum verify, optional token) | Hardening per release process |
+| Provisioning | Lazy per-adapter URLs; company manifest | Richer policy-driven provisioner (optional) |
+| Tools/MCP | worker-api + MCP as in §7 | **`request_deploy`** behind `HIVE_REQUEST_DEPLOY_ENABLED` (grant flow); optional **cosign** after pull via `HIVE_DEPLOY_GRANT_COSIGN_PUBLIC_KEY_PATH` |
+| Policy push | — | WebSocket **`worker_container_policy`** (`version`, `allowlistCsv`, `expiresAt`, HMAC `signature`) when worker has `HIVE_WORKER_POLICY_SECRET` |
+| Workspace | Shared root + `hiveWorkspace` cwd/`worktreePath` resolved under workspace root (`workspaceDirFromContext` in `link.go`); optional **`.hive/runs/<id>`** + defer cleanup when `HIVE_PER_RUN_WORKSPACE=1`; optional **`hiveWorkspaceMaterialize`** JSON (`repoUrl`, `ref`, `branchName`) when `HIVE_WORKSPACE_MATERIALIZE_ENABLED=1` runs `git clone` under `hive-materialize/`; optional **`hiveWorkspaceArtifact`** (`url`, `sha256`) when `HIVE_WORKSPACE_ARTIFACT_FETCH_ENABLED=1` | Cross-host paths when worktree exists only on control-plane host unless materialize/artifact path used (see ADR 007, `issue-worktree-support.md`) |
+| Per-run container/sandbox | Docker/container adapter with allowlist check before run | Autosandbox default-on (§5 target) still future |
+| WebSocket auth | Token / API key at connect | — |
+| Agent-facing format | JSON default | **TOON** when env `HIVE_AGENT_PAYLOAD_FORMAT=toon`, header `X-Hive-Agent-Payload-Format: toon`, or `Accept: application/x-hive-toon` (`worker-api-payload.ts`) |
 | Binary / image | Go binary; Docker image | — |
-| Health / metrics | GET /health, GET /metrics (local process only) | — |
+| Health / metrics | GET /health, GET /metrics | — |
 
 ## 11. Placement v1 and unified dispatch (optional — feature-flagged)
 

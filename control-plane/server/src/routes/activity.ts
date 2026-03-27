@@ -5,7 +5,7 @@ import { listActivityQuerySchema } from "@hive/shared";
 import { validate } from "../middleware/validate.js";
 import { activityService } from "../services/activity.js";
 import { getCurrentPrincipal } from "../auth/principal.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertCompanyPermission, assertCompanyRead } from "./authz.js";
 import { issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
 
@@ -33,7 +33,7 @@ export function activityRoutes(db: Db) {
 
   router.get("/companies/:companyId/activity", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
 
     const parsed = listActivityQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -56,8 +56,8 @@ export function activityRoutes(db: Db) {
   });
 
   router.post("/companies/:companyId/activity", validate(createActivitySchema), async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
+    await assertCompanyPermission(db, req, companyId, "activity:write");
     const event = await svc.create({
       companyId,
       ...req.body,
@@ -73,7 +73,7 @@ export function activityRoutes(db: Db) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const result = await svc.forIssue(issue.id);
     res.json(result);
   });
@@ -85,7 +85,7 @@ export function activityRoutes(db: Db) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const result = await svc.runsForIssue(issue.companyId, issue.id);
     res.json(result);
   });

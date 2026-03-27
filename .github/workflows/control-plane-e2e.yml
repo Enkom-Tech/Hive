@@ -71,7 +71,7 @@ jobs:
           HIVE_E2E_MCP_MATERIALIZE_SECRET: hive-e2e-mcp-materialize-secret
         run: pnpm run test:e2e
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: playwright-report

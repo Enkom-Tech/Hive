@@ -51,7 +51,7 @@ func TestPostGatewayAggregate(t *testing.T) {
 	defer ts.Close()
 
 	c := &Client{ControlPlaneBaseURL: ts.URL, OperatorBearer: "x", Provider: "bifrost"}
-	if err := c.PostGatewayAggregate(context.Background(), "550e8400-e29b-41d4-a716-446655440000", "m", 1, 2, 0); err != nil {
+	if err := c.PostGatewayAggregate(context.Background(), "550e8400-e29b-41d4-a716-446655440000", "m", 1, 2, 0, "idem-1"); err != nil {
 		t.Fatal(err)
 	}
 }

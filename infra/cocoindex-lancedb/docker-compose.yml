@@ -67,7 +67,7 @@ services:
       - cocoindex-net
 
   # -----------------------------------------------------------------------------
-  # CocoIndex v1 - Tree-sitter chunking + LanceDB embedded + Qwen3 embeddings
+  # CocoIndex v1 - AST/line chunking (optional Python ast) + LanceDB + Qwen3 embeddings
   # LanceDB runs inside this container (no separate service needed)
   # -----------------------------------------------------------------------------
   cocoindex:
@@ -111,7 +111,7 @@ services:
       - COCOINDEX_API_TOKEN=${COCOINDEX_API_TOKEN:?COCOINDEX_API_TOKEN must be set}
       - COCOINDEX_HIVE_NAMESPACE=default
       
-      # Tree-sitter languages (auto-detect)
+      # File extensions / language labels for chunk metadata (not tree-sitter parsers in v1)
       - COCOINDEX_LANGUAGES=python,typescript,javascript,rust,go
       
     depends_on:

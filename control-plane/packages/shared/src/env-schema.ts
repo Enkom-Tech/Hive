@@ -27,6 +27,11 @@ export const ENV_VAR_DOCS: Record<string, EnvVarDoc> = {
   HIVE_AUTH_PUBLIC_BASE_URL: { description: "Auth public base URL" },
   HIVE_DEPLOYMENT_MODE: { description: "Deployment mode", default: "local_trusted" },
   HIVE_DEPLOYMENT_EXPOSURE: { description: "Deployment exposure when authenticated", default: "private" },
+  HIVE_RBAC_ENFORCE_FOR_LOCAL_BOARD: {
+    description:
+      "When true, the local_trusted synthetic board user (`local-board`) is evaluated through normal company permission grants instead of bypassing RBAC. Use in CI or integration tests only; keep false/unset for normal local dev ergonomics.",
+    default: "false",
+  },
   HIVE_AUTH_BASE_URL_MODE: { description: "Auth base URL mode", default: "auto" },
   HIVE_ALLOWED_HOSTNAMES: { description: "Comma-separated hostnames for private access" },
   HIVE_UI_DEV_MIDDLEWARE: { description: "Enable Vite dev middleware for UI", default: "false" },
@@ -103,6 +108,23 @@ export const ENV_VAR_DOCS: Record<string, EnvVarDoc> = {
     description:
       "When true, requesting drain on a worker instance (PATCH) moves identities with automatic assignment to another eligible non-draining drone (ADR 005 Phase C); default off",
     default: "false",
+  },
+  HIVE_DRAIN_CANCEL_IN_FLIGHT_PLACEMENTS_ENABLED: {
+    description:
+      "When true (default), marking a worker instance draining cancels queued/running heartbeat runs still placed on that instance and fails placement rows (cancel+requeue policy). Set false to only block new runs.",
+    default: "true",
+  },
+  HIVE_VCS_GITHUB_WEBHOOK_ENABLED: {
+    description:
+      "When true, enables POST /api/companies/:companyId/integrations/github/webhook (raw body) for merge-driven execution workspace teardown; requires HIVE_VCS_GITHUB_WEBHOOK_SECRET",
+    default: "false",
+  },
+  HIVE_VCS_GITHUB_WEBHOOK_SECRET: {
+    description: "GitHub webhook signing secret (HMAC SHA-256) shared with the GitHub App / webhook configuration",
+  },
+  HIVE_VCS_GITHUB_ALLOWED_REPOS: {
+    description:
+      "Optional comma-separated owner/repo list; pull_request events for other repositories are ignored (empty = allow all)",
   },
   HIVE_WORKER_DELIVERY_BUS_URL: {
     description:
@@ -224,6 +246,7 @@ export const PARSED_ENV_KEYS = [
   "HIVE_AUTH_PUBLIC_BASE_URL",
   "HIVE_DEPLOYMENT_MODE",
   "HIVE_DEPLOYMENT_EXPOSURE",
+  "HIVE_RBAC_ENFORCE_FOR_LOCAL_BOARD",
   "HIVE_AUTH_BASE_URL_MODE",
   "HIVE_ALLOWED_HOSTNAMES",
   "HIVE_UI_DEV_MIDDLEWARE",
@@ -273,6 +296,10 @@ export const PARSED_ENV_KEYS = [
   "HIVE_WORKER_IDENTITY_AUTOMATION_ENABLED",
   "HIVE_WORKER_AUTOMATION_RECONCILE_INTERVAL_MS",
   "HIVE_DRAIN_AUTO_EVACUATE_ENABLED",
+  "HIVE_DRAIN_CANCEL_IN_FLIGHT_PLACEMENTS_ENABLED",
+  "HIVE_VCS_GITHUB_WEBHOOK_ENABLED",
+  "HIVE_VCS_GITHUB_WEBHOOK_SECRET",
+  "HIVE_VCS_GITHUB_ALLOWED_REPOS",
   "HIVE_WORKER_DELIVERY_BUS_URL",
   "HIVE_METRICS_ENABLED",
   "HIVE_UI_MIGRATIONS_ENABLED",

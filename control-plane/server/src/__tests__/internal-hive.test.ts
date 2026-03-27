@@ -80,4 +80,28 @@ describe("internal hive routes", () => {
       }),
     );
   });
+
+  it("forwards idempotencyKey to gatewayMeteringKey", async () => {
+    const occurredAt = new Date().toISOString();
+    await request(app("op-secret"))
+      .post("/internal/hive/inference-metering")
+      .set("Authorization", "Bearer op-secret")
+      .send({
+        companyId,
+        source: "gateway_aggregate",
+        agentId: null,
+        provider: "model_gateway",
+        model: "gpt-4o",
+        inputTokens: 1,
+        outputTokens: 2,
+        costCents: 0,
+        occurredAt,
+        idempotencyKey: "idem-test-1",
+      })
+      .expect(201);
+    expect(createEvent).toHaveBeenCalledWith(
+      companyId,
+      expect.objectContaining({ gatewayMeteringKey: "idem-test-1" }),
+    );
+  });
 });

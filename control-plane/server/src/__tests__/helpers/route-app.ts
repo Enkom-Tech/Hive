@@ -1,5 +1,6 @@
 import express, { type Router } from "express";
 import type { Principal } from "@hive/shared";
+import { LOCAL_BOARD_USER_ID } from "../../board-claim.js";
 import { errorHandler } from "../../middleware/error-handler.js";
 
 export type BoardPrincipalOpts = {
@@ -31,7 +32,7 @@ export function principalBoard(opts: BoardPrincipalOpts): Principal {
   }
   return {
     type: "user",
-    id: opts.id ?? "user-1",
+    id: opts.id ?? LOCAL_BOARD_USER_ID,
     company_ids: opts.companyIds,
     roles: opts.isInstanceAdmin ? ["instance_admin"] : [],
   };
@@ -94,7 +95,16 @@ export function actorBoard(
   overrides?: Partial<Omit<BoardPrincipalOpts, "companyIds">> & { source?: "session" | "local_implicit" },
 ): Principal {
   const isSystem = overrides?.source === "local_implicit" || overrides?.isSystem;
-  return principalBoard({ companyIds, isSystem: Boolean(isSystem), ...overrides });
+  const explicitSession = overrides?.source === "session";
+  const id =
+    overrides?.id ??
+    (isSystem ? undefined : explicitSession ? "user-1" : LOCAL_BOARD_USER_ID);
+  return principalBoard({
+    companyIds,
+    isSystem: Boolean(isSystem),
+    ...overrides,
+    id,
+  });
 }
 
 /** @deprecated Use principalAgent. */

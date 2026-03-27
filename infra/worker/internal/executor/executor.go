@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +90,19 @@ func (e *ProcessExecutor) workspaceDir() string {
 	return DefaultWorkspaceRoot()
 }
 
+// CancelGraceDuration returns HIVE_CANCEL_GRACE_SECONDS as duration, or 0 if unset/invalid (immediate kill via context).
+func CancelGraceDuration() time.Duration {
+	s := strings.TrimSpace(os.Getenv("HIVE_CANCEL_GRACE_SECONDS"))
+	if s == "" {
+		return 0
+	}
+	sec, err := strconv.Atoi(s)
+	if err != nil || sec < 0 {
+		return 0
+	}
+	return time.Duration(sec) * time.Second
+}
+
 func (e *ProcessExecutor) runner() CommandRunner {
 	if e.Runner != nil {
 		return e.Runner
@@ -119,8 +133,30 @@ func (e *ProcessExecutor) Run(ctx context.Context, payload *Payload, workspaceDi
 		env = append(env, "HIVE_CONTEXT_JSON="+base64.StdEncoding.EncodeToString(payload.Context))
 	}
 	env = AppendHiveMcpEnv(env)
-	runner := e.runner()
-	return runner.Run(ctx, cmd, nil, absDir, env)
+	grace := CancelGraceDuration()
+	if grace == 0 {
+		return e.runner().Run(ctx, cmd, nil, absDir, env)
+	}
+	c := exec.Command(cmd) // #nosec G204 -- cmd from operator config
+	setProcAttrs(c)
+	c.Dir = absDir
+	c.Env = env
+	var stdoutBuf, stderrBuf bytes.Buffer
+	c.Stdout = &stdoutBuf
+	c.Stderr = &stderrBuf
+	if err := c.Start(); err != nil {
+		return nil, nil, err
+	}
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- c.Wait() }()
+	select {
+	case <-ctx.Done():
+		terminateGracefully(c.Process, grace)
+		<-waitCh
+		return stdoutBuf.Bytes(), stderrBuf.Bytes(), ctx.Err()
+	case err := <-waitCh:
+		return stdoutBuf.Bytes(), stderrBuf.Bytes(), err
+	}
 }
 
 // LogChunkCallback is called for each streamed stdout/stderr chunk (stream, chunk, iso8601 ts).
@@ -152,8 +188,14 @@ func (e *ProcessExecutor) RunStream(ctx context.Context, payload *Payload, works
 	if onChunk == nil {
 		return e.Run(ctx, payload, workspaceDir)
 	}
-	// Use exec with pipes to stream stdout/stderr
-	execCmd := exec.CommandContext(ctx, cmd)
+	grace := CancelGraceDuration()
+	var execCmd *exec.Cmd
+	if grace > 0 {
+		execCmd = exec.Command(cmd) // #nosec G204 -- cmd from operator config
+		setProcAttrs(execCmd)
+	} else {
+		execCmd = exec.CommandContext(ctx, cmd) // #nosec G204
+	}
 	execCmd.Dir = absDir
 	execCmd.Env = env
 	stdoutPipe, err := execCmd.StdoutPipe()
@@ -183,6 +225,23 @@ func (e *ProcessExecutor) RunStream(ctx context.Context, payload *Payload, works
 	wg.Add(2)
 	go readStream(stdoutPipe, "stdout", &outBuf)
 	go readStream(stderrPipe, "stderr", &errBuf)
+	if grace > 0 {
+		waitCh := make(chan error, 1)
+		go func() { waitCh <- execCmd.Wait() }()
+		select {
+		case <-ctx.Done():
+			terminateGracefully(execCmd.Process, grace)
+			wg.Wait()
+			<-waitCh
+			return outBuf.Bytes(), errBuf.Bytes(), ctx.Err()
+		case err := <-waitCh:
+			wg.Wait()
+			if ctx.Err() != nil {
+				return outBuf.Bytes(), errBuf.Bytes(), ctx.Err()
+			}
+			return outBuf.Bytes(), errBuf.Bytes(), err
+		}
+	}
 	wg.Wait()
 	waitErr := execCmd.Wait()
 	if ctx.Err() != nil {

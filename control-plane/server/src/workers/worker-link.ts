@@ -667,6 +667,10 @@ export function sendRunToWorker(
     modelId?: string;
     placementId?: string;
     expectedWorkerInstanceId?: string;
+    companyId?: string;
+    imageRef?: string;
+    expiresAt?: string;
+    signature?: string;
   },
 ): boolean {
   const json = JSON.stringify(message);
@@ -685,6 +689,20 @@ export function sendRunToWorker(
 
 export function sendCancelToWorker(agentId: string, runId: string): boolean {
   return sendRunToWorker(agentId, { type: "cancel", runId });
+}
+
+/** Delivers a signed deploy_grant frame to the worker link for digest-pinned image pull (request_deploy v1). */
+export function sendDeployGrantToWorker(
+  agentId: string,
+  message: {
+    type: string;
+    companyId?: string;
+    imageRef?: string;
+    expiresAt?: string;
+    signature?: string;
+  },
+): boolean {
+  return sendRunToWorker(agentId, message);
 }
 
 export function isAgentWorkerConnected(agentId: string): boolean {

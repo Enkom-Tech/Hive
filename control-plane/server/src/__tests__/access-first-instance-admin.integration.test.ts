@@ -1,3 +1,8 @@
+import { vi } from "vitest";
+
+/** Use real access service + DB; server unit tests mock `../services/access.js` globally. */
+vi.unmock("../services/access.js");
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";

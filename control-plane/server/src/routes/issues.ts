@@ -16,7 +16,7 @@ import {
   ISSUE_STATUS_IN_PROGRESS,
 } from "@hive/shared";
 import type { StorageService } from "../storage/types.js";
-import { getCurrentPrincipal } from "../auth/principal.js";
+import { getCurrentPrincipal, isLocalImplicit } from "../auth/principal.js";
 import { validate } from "../middleware/validate.js";
 import {
   accessService,
@@ -36,7 +36,7 @@ import {
 } from "../services/index.js";
 import { logger } from "../middleware/logger.js";
 import { forbidden, HttpError, unauthorized } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "./authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import { isAllowedContentType, getMaxAttachmentBytes } from "../attachment-types.js";
 
@@ -72,9 +72,18 @@ export function issueRoutes(db: Db, storage: StorageService) {
   }
 
   async function assertCanManageIssueApprovalLinks(req: Request, res: Response, companyId: string) {
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const p = getCurrentPrincipal(req);
-    if (p?.type === "user" || p?.type === "system") return true;
+    if (p?.type === "user" || p?.type === "system") {
+      if (p?.type === "system" || isLocalImplicit(req)) return true;
+      if (p?.roles?.includes("instance_admin")) return true;
+      const ok = await access.canUser(companyId, p.id ?? "", "approvals:act");
+      if (!ok) {
+        res.status(403).json({ error: "Missing permission: approvals:act" });
+        return false;
+      }
+      return true;
+    }
     if (!p?.id || p?.type !== "agent") {
       res.status(403).json({ error: "Agent authentication required" });
       return false;
@@ -95,17 +104,27 @@ export function issueRoutes(db: Db, storage: StorageService) {
     return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
   }
 
-  async function assertCanAssignTasks(req: Request, companyId: string) {
-    assertCompanyAccess(req, companyId);
+  async function assertCanAssignTasks(req: Request, companyId: string, assigneeAgentId?: string | null) {
+    await assertCompanyRead(db, req, companyId);
     const p = getCurrentPrincipal(req);
     if (p?.type === "user" || p?.type === "system") {
       if (p?.type === "system" || p?.roles?.includes("instance_admin")) return;
+      if (assigneeAgentId) {
+        const ok = await access.canPrincipalAssignAgent(companyId, "user", p?.id ?? "", assigneeAgentId);
+        if (!ok) throw forbidden("Missing permission to assign to this agent");
+        return;
+      }
       const allowed = await access.canUser(companyId, p?.id ?? "", "tasks:assign");
       if (!allowed) throw forbidden("Missing permission: tasks:assign");
       return;
     }
     if (p?.type === "agent") {
       if (!p.id) throw forbidden("Agent authentication required");
+      if (assigneeAgentId) {
+        const ok = await access.canPrincipalAssignAgent(companyId, "agent", p.id, assigneeAgentId);
+        if (!ok) throw forbidden("Missing permission to assign to this agent");
+        return;
+      }
       const allowedByGrant = await access.hasPermission(companyId, "agent", p.id, "tasks:assign");
       if (allowedByGrant) return;
       const actorAgent = await agentsSvc.getById(p.id);
@@ -278,7 +297,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
   router.get("/companies/:companyId/issues", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const parsed = listIssuesQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -333,14 +352,14 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
   router.get("/companies/:companyId/labels", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const result = await svc.listLabels(companyId);
     res.json(result);
   });
 
   router.post("/companies/:companyId/labels", validate(createIssueLabelSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "issues:write");
     const label = await svc.createLabel(companyId, req.body);
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -364,7 +383,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Label not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "issues:write");
     const removed = await svc.deleteLabel(labelId);
     if (!removed) {
       res.status(404).json({ error: "Label not found" });
@@ -392,7 +411,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const [ancestors, project, goal, mentionedProjectIds] = await Promise.all([
       svc.getAncestors(issue.id),
       issue.projectId ? projectsSvc.getById(issue.projectId) : null,
@@ -423,7 +442,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const pMark = getCurrentPrincipal(req);
     if (pMark?.type !== "user" && pMark?.type !== "system") {
       res.status(403).json({ error: "Board authentication required" });
@@ -456,7 +475,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(id);
     res.json(approvals);
   });
@@ -468,7 +487,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const approvals = await issueApprovalsSvc.listApprovalsForIssue(id);
     const qualityReview = approvals.find((a) => a.type === "quality_review") ?? null;
     res.json(qualityReview);
@@ -535,9 +554,9 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
   router.post("/companies/:companyId/issues", validate(createIssueSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "issues:write");
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
-      await assertCanAssignTasks(req, companyId);
+      await assertCanAssignTasks(req, companyId, req.body.assigneeAgentId ?? null);
     }
     await assertIssueDepartmentConstraints(req, companyId, {
       departmentId: req.body.departmentId,
@@ -645,7 +664,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "issues:write");
     const assigneeWillChange =
       (req.body.assigneeAgentId !== undefined && req.body.assigneeAgentId !== existing.assigneeAgentId) ||
       (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId);
@@ -661,7 +680,9 @@ export function issueRoutes(db: Db, storage: StorageService) {
 
     if (assigneeWillChange) {
       if (!isAgentReturningIssueToCreator) {
-        await assertCanAssignTasks(req, existing.companyId);
+        const nextAssigneeAgentId =
+          req.body.assigneeAgentId !== undefined ? req.body.assigneeAgentId : existing.assigneeAgentId;
+        await assertCanAssignTasks(req, existing.companyId, nextAssigneeAgentId ?? null);
       }
     }
     await assertIssueDepartmentConstraints(req, existing.companyId, {
@@ -864,7 +885,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "issues:write");
     const attachments = await svc.listAttachments(id);
 
     const issue = await svc.remove(id);
@@ -903,7 +924,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyPermission(db, req, issue.companyId, "issues:write");
 
     const pCheckout = getCurrentPrincipal(req);
     if (pCheckout?.type === "agent" && pCheckout.id !== req.body.agentId) {
@@ -972,7 +993,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "issues:write");
     if (!(await assertAgentRunCheckoutOwnership(req, res, existing))) return;
     const actorRunId = requireAgentRunId(req, res);
     const pRelease = getCurrentPrincipal(req);
@@ -1010,7 +1031,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const comments = await svc.listComments(id);
     res.json(comments);
   });
@@ -1023,7 +1044,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const comment = await svc.getComment(commentId);
     if (!comment || comment.issueId !== id) {
       res.status(404).json({ error: "Comment not found" });
@@ -1039,7 +1060,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyPermission(db, req, issue.companyId, "activity:write");
     if (!(await assertAgentRunCheckoutOwnership(req, res, issue))) return;
 
     const actor = getActorInfo(req);
@@ -1253,7 +1274,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccess(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
     const attachments = await svc.listAttachments(issueId);
     res.json(attachments.map(withContentPath));
   });
@@ -1261,7 +1282,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
   router.post("/companies/:companyId/issues/:issueId/attachments", async (req, res) => {
     const companyId = req.params.companyId as string;
     const issueId = req.params.issueId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "issues:write");
     const issue = await svc.getById(issueId);
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
@@ -1356,7 +1377,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Attachment not found" });
       return;
     }
-    assertCompanyAccess(req, attachment.companyId);
+    await assertCompanyRead(db, req, attachment.companyId);
 
     const object = await storage.getObject(attachment.companyId, attachment.objectKey);
     res.setHeader("Content-Type", attachment.contentType || object.contentType || "application/octet-stream");
@@ -1378,7 +1399,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Attachment not found" });
       return;
     }
-    assertCompanyAccess(req, attachment.companyId);
+    await assertCompanyPermission(db, req, attachment.companyId, "issues:write");
 
     try {
       await storage.deleteObject(attachment.companyId, attachment.objectKey);

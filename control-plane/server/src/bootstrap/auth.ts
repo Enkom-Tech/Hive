@@ -70,7 +70,7 @@ async function ensureLocalTrustedBoardPrincipal(db: Db): Promise<void> {
       principalType: "user",
       principalId: LOCAL_BOARD_USER_ID,
       status: "active",
-      membershipRole: "owner",
+      membershipRole: "admin",
     });
   }
 }

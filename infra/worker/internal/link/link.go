@@ -17,10 +17,14 @@ import (
 
 	"github.com/Enkom-Tech/hive-worker/internal/adapter"
 	"github.com/Enkom-Tech/hive-worker/internal/boardurl"
+	"github.com/Enkom-Tech/hive-worker/internal/deploygrant"
 	"github.com/Enkom-Tech/hive-worker/internal/executor"
 	"github.com/Enkom-Tech/hive-worker/internal/instanceid"
+	"github.com/Enkom-Tech/hive-worker/internal/policyoverlay"
 	"github.com/Enkom-Tech/hive-worker/internal/runstore"
 	"github.com/Enkom-Tech/hive-worker/internal/version"
+	"github.com/Enkom-Tech/hive-worker/internal/workspaceartifact"
+	"github.com/Enkom-Tech/hive-worker/internal/workspacematerialize"
 	"github.com/Enkom-Tech/hive-worker/internal/workspacesync"
 	"github.com/gorilla/websocket"
 )
@@ -324,6 +328,71 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 			continue
 		}
 		switch msg.Type {
+		case "worker_container_policy":
+			var pol struct {
+				Version      string `json:"version"`
+				AllowlistCSV string `json:"allowlistCsv"`
+				ExpiresAt    string `json:"expiresAt"`
+				Signature    string `json:"signature"`
+			}
+			if err := json.Unmarshal(data, &pol); err != nil {
+				continue
+			}
+			if policyoverlay.ApplySignedAllowlist(pol.Version, pol.AllowlistCSV, pol.ExpiresAt, pol.Signature) {
+				log.Printf("link: applied worker_container_policy version=%s", pol.Version)
+			} else {
+				log.Printf("link: worker_container_policy rejected")
+			}
+			continue
+		case "deploy_grant":
+			if !deploygrant.Enabled() {
+				continue
+			}
+			var dg struct {
+				CompanyID string `json:"companyId"`
+				ImageRef  string `json:"imageRef"`
+				ExpiresAt string `json:"expiresAt"`
+				Signature string `json:"signature"`
+			}
+			if err := json.Unmarshal(data, &dg); err != nil {
+				continue
+			}
+			secret := strings.TrimSpace(os.Getenv("HIVE_DEPLOY_GRANT_SECRET"))
+			if !deploygrant.VerifySignature(secret, dg.CompanyID, dg.ImageRef, dg.ExpiresAt, dg.Signature) {
+				log.Printf("link: deploy_grant: bad signature")
+				continue
+			}
+			if deploygrant.Expired(dg.ExpiresAt) {
+				log.Printf("link: deploy_grant: expired")
+				continue
+			}
+			if envCo := strings.TrimSpace(os.Getenv("HIVE_COMPANY_ID")); envCo != "" && !strings.EqualFold(envCo, dg.CompanyID) {
+				log.Printf("link: deploy_grant: company mismatch")
+				continue
+			}
+			if !deploygrant.DigestPinned(dg.ImageRef) {
+				log.Printf("link: deploy_grant: image ref is not digest-pinned")
+				continue
+			}
+			if !deploygrant.RegistryAllowed(dg.ImageRef) {
+				log.Printf("link: deploy_grant: registry not allowlisted")
+				continue
+			}
+			if err := executor.EnforceContainerImagePolicy(dg.ImageRef); err != nil {
+				log.Printf("link: deploy_grant: container image policy: %v", err)
+				continue
+			}
+			go func(image string) {
+				ctxPull, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+				defer cancel()
+				if err := deploygrant.DockerPull(ctxPull, image); err != nil {
+					log.Printf("link: deploy_grant pull %s: %v", image, err)
+					return
+				}
+				if err := deploygrant.VerifyImageCosignIfConfigured(ctxPull, image); err != nil {
+					log.Printf("link: deploy_grant cosign %s: %v", image, err)
+				}
+			}(dg.ImageRef)
 		case "run":
 			if msg.RunID == "" {
 				continue
@@ -394,6 +463,22 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 					ModelID: runModelID,
 				}
 				workspaceDir := workspaceDirFromContext(msg.Context)
+				if spec, ok := parseMaterializeSpec(msg.Context); ok && workspacematerialize.Enabled() {
+					root := executor.DefaultWorkspaceRoot()
+					if dir, err := workspacematerialize.Materialize(ctxRun, root, spec); err != nil {
+						log.Printf("workspacematerialize: %v", err)
+					} else if dir != "" {
+						workspaceDir = dir
+					}
+				} else if art, ok := parseArtifactSpec(msg.Context); ok && workspaceartifact.EnvEnabled() {
+					root := executor.DefaultWorkspaceRoot()
+					dest := filepath.Join(root, "hive-artifact", sanitizeRunIDForPath(runID))
+					if err := workspaceartifact.Fetch(ctxRun, art.URL, art.SHA256, dest); err != nil {
+						log.Printf("workspaceartifact: %v", err)
+					} else {
+						workspaceDir = dest
+					}
+				}
 				absWorkspace := workspaceDir
 				if strings.TrimSpace(absWorkspace) == "" {
 					absWorkspace = executor.DefaultWorkspaceRoot()
@@ -401,24 +486,44 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 				if ap, err := filepath.Abs(absWorkspace); err == nil {
 					absWorkspace = ap
 				}
+				perRun := perRunWorkspaceEnabled()
+				var perRunDir string
+				effWorkspace := workspaceDir
+				effAbs := absWorkspace
+				if perRun && runID != "" {
+					perRunDir = filepath.Join(absWorkspace, ".hive", "runs", sanitizeRunIDForPath(runID))
+					if err := os.MkdirAll(perRunDir, 0o750); err != nil {
+						log.Printf("link: per-run workspace mkdir: %v", err)
+					} else {
+						effAbs = perRunDir
+						effWorkspace = perRunDir
+					}
+				}
+				defer func() {
+					if perRunDir != "" {
+						if err := os.RemoveAll(perRunDir); err != nil {
+							log.Printf("link: per-run workspace cleanup: %v", err)
+						}
+					}
+				}()
 				var stdout, stderr []byte
 				var runErr error
 				ex := registry.Executor(adapterKey)
 				switch execEx := ex.(type) {
 				case *executor.ProcessExecutor:
-					stdout, stderr, runErr = execEx.RunStream(ctxRun, payload, workspaceDir, func(stream, chunk, ts string) {
+					stdout, stderr, runErr = execEx.RunStream(ctxRun, payload, effWorkspace, func(stream, chunk, ts string) {
 						sendLog(runID, agentID, stream, chunk, ts)
 					})
 				case *executor.AcpxExecutor:
-					stdout, stderr, runErr = execEx.RunStream(ctxRun, payload, workspaceDir, func(stream, chunk, ts string) {
+					stdout, stderr, runErr = execEx.RunStream(ctxRun, payload, effWorkspace, func(stream, chunk, ts string) {
 						sendLog(runID, agentID, stream, chunk, ts)
 					})
 				default:
-					stdout, stderr, runErr = registry.Run(ctxRun, adapterKey, payload, workspaceDir)
+					stdout, stderr, runErr = registry.Run(ctxRun, adapterKey, payload, effWorkspace)
 				}
 
 				finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
-				side := ReadRunUsageSidecar(absWorkspace)
+				side := ReadRunUsageSidecar(effAbs)
 				if ctxRun.Err() != nil {
 					sendStatus(runID, agentID, statusCancelled, nil, "")
 				} else if runErr != nil {
@@ -453,7 +558,7 @@ func (c *Client) runLoop(ctx context.Context, conn *websocket.Conn) {
 				}
 
 				if workspacesync.Enabled() {
-					wsRoot := workspaceDir
+					wsRoot := effWorkspace
 					if strings.TrimSpace(wsRoot) == "" {
 						wsRoot = executor.DefaultWorkspaceRoot()
 					}
@@ -481,6 +586,32 @@ func excerpt(s string, maxLen int) string {
 	return s[len(s)-maxLen:]
 }
 
+func perRunWorkspaceEnabled() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("HIVE_PER_RUN_WORKSPACE")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+func sanitizeRunIDForPath(runID string) string {
+	s := strings.TrimSpace(runID)
+	if s == "" {
+		return "unknown"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '/', '\\', ':', '\x00':
+			b.WriteByte('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "unknown"
+	}
+	return out
+}
+
 // AgentAllowlistFromEnv parses HIVE_LINK_AGENT_ALLOWLIST (comma-separated board agent ids). When non-empty, only those agent ids may execute runs on this link (pool / shared instance).
 func AgentAllowlistFromEnv() []string {
 	raw := strings.TrimSpace(os.Getenv("HIVE_LINK_AGENT_ALLOWLIST"))
@@ -497,6 +628,57 @@ func AgentAllowlistFromEnv() []string {
 		return nil
 	}
 	return out
+}
+
+func parseMaterializeSpec(raw json.RawMessage) (workspacematerialize.Spec, bool) {
+	var out workspacematerialize.Spec
+	if len(raw) == 0 {
+		return out, false
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return out, false
+	}
+	blob, ok := obj["hiveWorkspaceMaterialize"].(map[string]any)
+	if !ok {
+		return out, false
+	}
+	out.RepoURL, _ = blob["repoUrl"].(string)
+	if out.RepoURL == "" {
+		out.RepoURL, _ = blob["repoURL"].(string)
+	}
+	out.Ref, _ = blob["ref"].(string)
+	out.BranchName, _ = blob["branchName"].(string)
+	if strings.TrimSpace(out.RepoURL) == "" || strings.TrimSpace(out.Ref) == "" {
+		return out, false
+	}
+	return out, true
+}
+
+type artifactSpec struct {
+	URL    string
+	SHA256 string
+}
+
+func parseArtifactSpec(raw json.RawMessage) (artifactSpec, bool) {
+	var z artifactSpec
+	if len(raw) == 0 {
+		return z, false
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return z, false
+	}
+	blob, ok := obj["hiveWorkspaceArtifact"].(map[string]any)
+	if !ok {
+		return z, false
+	}
+	z.URL, _ = blob["url"].(string)
+	z.SHA256, _ = blob["sha256"].(string)
+	if strings.TrimSpace(z.URL) == "" {
+		return z, false
+	}
+	return z, true
 }
 
 func workspaceDirFromContext(raw json.RawMessage) string {
@@ -525,6 +707,8 @@ func workspaceDirFromContext(raw json.RawMessage) string {
 	absCandidate, err := filepath.Abs(candidate)
 	if err != nil {
 		absCandidate = candidate
+	} else if resolved, errEv := filepath.EvalSymlinks(absCandidate); errEv == nil {
+		absCandidate = resolved
 	}
 	root := executor.DefaultWorkspaceRoot()
 	absRoot, err := filepath.Abs(root)

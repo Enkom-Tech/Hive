@@ -20,7 +20,7 @@ import {
 } from "../services/index.js";
 import { assertAdapterTypeAllowed, validateAdapterConfig } from "../adapters/index.js";
 import { getCurrentPrincipal } from "../auth/principal.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "./authz.js";
 import { redactEventPayload } from "../redaction.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
@@ -45,7 +45,7 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
 
   router.get("/companies/:companyId/approvals", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const parsed = listApprovalsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -62,13 +62,13 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, approval.companyId);
+    await assertCompanyRead(db, req, approval.companyId);
     res.json(redactApprovalPayload(approval));
   });
 
   router.post("/companies/:companyId/approvals", validate(createApprovalSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const rawIssueIds = req.body.issueIds;
     const issueIds = Array.isArray(rawIssueIds)
       ? rawIssueIds.filter((value: unknown): value is string => typeof value === "string")
@@ -126,14 +126,19 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, approval.companyId);
+    await assertCompanyRead(db, req, approval.companyId);
     const issues = await issueApprovalsSvc.listIssuesForApproval(id);
     res.json(issues);
   });
 
   router.post("/approvals/:id/approve", validate(resolveApprovalSchema), async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
+    const pre = await svc.getById(id);
+    if (!pre) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    await assertCompanyPermission(db, req, pre.companyId, "approvals:act");
     const { approval, applied } = await svc.approve(
       id,
       req.body.decidedByUserId ?? "board",
@@ -227,8 +232,13 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
   });
 
   router.post("/approvals/:id/reject", validate(resolveApprovalSchema), async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
+    const pre = await svc.getById(id);
+    if (!pre) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    await assertCompanyPermission(db, req, pre.companyId, "approvals:act");
     const { approval, applied } = await svc.reject(
       id,
       req.body.decidedByUserId ?? "board",
@@ -254,8 +264,13 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
     "/approvals/:id/request-revision",
     validate(requestApprovalRevisionSchema),
     async (req, res) => {
-      assertBoard(req);
       const id = req.params.id as string;
+      const pre = await svc.getById(id);
+      if (!pre) {
+        res.status(404).json({ error: "Approval not found" });
+        return;
+      }
+      await assertCompanyPermission(db, req, pre.companyId, "approvals:act");
       const approval = await svc.requestRevision(
         id,
         req.body.decidedByUserId ?? "board",
@@ -283,7 +298,7 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyRead(db, req, existing.companyId);
 
     const p = getCurrentPrincipal(req);
     if (p?.type === "agent" && p.id !== existing.requestedByAgentId) {
@@ -322,7 +337,7 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, approval.companyId);
+    await assertCompanyRead(db, req, approval.companyId);
     const comments = await svc.listComments(id);
     res.json(comments);
   });
@@ -334,7 +349,7 @@ export function approvalRoutes(db: Db, strictSecretsMode: boolean) {
       res.status(404).json({ error: "Approval not found" });
       return;
     }
-    assertCompanyAccess(req, approval.companyId);
+    await assertCompanyRead(db, req, approval.companyId);
     const actor = getActorInfo(req);
     const comment = await svc.addComment(id, req.body.body, {
       agentId: actor.agentId ?? undefined,

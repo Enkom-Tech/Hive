@@ -80,10 +80,13 @@ export function internalHiveRoutes(
     validate(inferenceMeteringBodySchema),
     async (req, res, next) => {
       try {
-        const { companyId, occurredAt, ...rest } = req.body as z.infer<typeof inferenceMeteringBodySchema>;
+        const { companyId, occurredAt, idempotencyKey, ...rest } = req.body as z.infer<
+          typeof inferenceMeteringBodySchema
+        >;
         const event = await costs.createEvent(companyId, {
           ...rest,
           occurredAt: new Date(occurredAt),
+          gatewayMeteringKey: idempotencyKey?.trim() ? idempotencyKey.trim() : null,
         });
         res.status(201).json(event);
       } catch (e) {

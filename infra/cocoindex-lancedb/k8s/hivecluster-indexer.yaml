@@ -69,7 +69,7 @@ spec:
     # Auto-index on startup and on repo changes
     autoIndex: true
     
-    # Languages to index (tree-sitter parsers)
+    # Languages / extensions for chunk metadata (v1 uses ast+line chunking, not tree-sitter)
     languages:
       - python
       - javascript

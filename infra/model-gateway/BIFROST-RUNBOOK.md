@@ -63,6 +63,22 @@ Companion to [`BIFROST-INTEGRATION.md`](BIFROST-INTEGRATION.md) and [ADR 006](..
 - Plugin JSON config must include **`control_plane_base_url`** (board API origin) and **`operator_bearer`** (same secret as **`HIVE_INTERNAL_OPERATOR_SECRET`** on the server).
 - Register the `.so` in Bifrost **`config.json`** plugins list per upstream docs.
 
+### Metering source (record per environment)
+
+Document which Hive metering approach each environment uses (see options in [`BIFROST-METERING.md`](BIFROST-METERING.md)). Update this table when the choice changes.
+
+| Environment | Option | Notes |
+|---------------|--------|--------|
+| **Dev** | 1 plugin / 2 ETL / 3 gap accepted | |
+| **Staging** | 1 plugin / 2 ETL / 3 gap accepted | |
+| **Prod** | 1 plugin / 2 ETL / 3 gap accepted | |
+
+- **Option 1** — Bifrost **`hive_metering`** plugin posts aggregates to the control plane (recommended when Hive Postgres is authoritative).
+- **Option 2** — ETL from Bifrost logs/metrics into Hive on a schedule.
+- **Option 3** — Accept incomplete Hive cost rows until Option 1 or 2 is adopted.
+
+**Record:** owner / date of last review (e.g. in your change-management ticket or wiki link).
+
 ## OpenBao / Vault (optional)
 
 - To avoid storing **`sk-bf-*`** only in Kubernetes: use **External Secrets Operator** (or similar) to sync from OpenBao path e.g. **`kv/hive/<deployment>/<company>/model-gateway`** into the tenant Secret referenced by **`modelGatewayCredentialSecret`**. The board can still mint keys via the API; automation writes the material to OpenBao out of band.

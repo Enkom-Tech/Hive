@@ -3,7 +3,7 @@ import type { Db } from "@hive/db";
 import { connectSchema, normalizeAgentUrlKey, ISSUE_STATUSES_WORKABLE_FOR_WEBHOOK } from "@hive/shared";
 import { validate } from "../middleware/validate.js";
 import { agentService, issueService, logActivity } from "../services/index.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyPermission, getActorInfo } from "./authz.js";
 
 function getBaseUrl(req: Request, authPublicBaseUrl?: string): string {
   const fromRequest =
@@ -23,9 +23,9 @@ export function connectRoutes(
   const { authPublicBaseUrl } = opts;
 
   router.post("/companies/:companyId/connect", validate(connectSchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
     assertBoard(req);
+    const companyId = req.params.companyId as string;
+    await assertCompanyPermission(db, req, companyId, "company:settings");
 
     const { toolName, toolVersion, agentName } = req.body;
     const resolved = await svc.resolveByReference(companyId, agentName);

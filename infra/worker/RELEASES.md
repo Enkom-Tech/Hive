@@ -33,6 +33,10 @@ Generate a standard checksum file over **only** the five archives above, e.g.:
 
 On Linux you can use `sha256sum` instead of `shasum -a 256`. Upload `SHA256SUMS` next to the archives.
 
+## Verified install script (Linux)
+
+For Linux hosts with `curl`, `jq`, and `sha256sum`, see [`scripts/install-hive-worker.sh`](scripts/install-hive-worker.sh). Point **`HIVE_WORKER_MANIFEST_URL`** at a JSON document listing `url` and `sha256` per version and architecture (`linux_amd64`, `linux_arm64`).
+
 ## Manifest JSON (`manifest-only` mode)
 
 When the control plane **cannot** call `api.github.com` (air-gap) or all URLs are internal, set **`HIVE_WORKER_MANIFEST_URL`** to an HTTPS URL returning JSON with this shape:
@@ -79,6 +83,8 @@ If using **`HIVE_WORKER_ARTIFACT_BASE_URL`**, set it to the prefix that already 
 ```
 
 Outputs under `dist/`: archives, `SHA256SUMS`, and `hive-worker_v0.2.7.manifest.json`.
+
+**CI / release gate:** Before publishing assets, verify checksums match the five archives (e.g. `(cd dist && sha256sum -c SHA256SUMS)` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS). Fail the pipeline on any mismatch.
 
 ## Docker Compose and systemd (reference)
 

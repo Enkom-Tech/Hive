@@ -225,6 +225,8 @@ GET  /api/worker-api/issues/{issueId}?agentId=<uuid>
 
 **201** / **200** `{ "ok": true, "result": { ... } }`. Activity actions use the **`worker_api.*`** prefix.
 
+**Agent payload format (TOON):** Success responses may use compact TOON for `result` when any of: server env **`HIVE_AGENT_PAYLOAD_FORMAT=toon`**, request header **`X-Hive-Agent-Payload-Format: toon`**, or **`Accept`** includes **`application/x-hive-toon`**. Shape: `{ "ok": true, "format": "toon", "result": "<toon string>" }`. Encoding is minimal sorted-key line format (see `server/src/utils/toon-encode.ts`), not the full binary TOON spec. **Inventory (all negotiated routes):** `POST /cost-report`, `POST /issues`, `PATCH /issues/:id`, `POST /agent-hires`, `POST /issues/:id/comments`, `POST /issues/:id/transition`, `GET /issues/:id`. Idempotent **`POST /issues`** replays store canonical JSON in Postgres; replays honor TOON negotiation via re-encoding.
+
 Agent-facing tools use **`hive-worker mcp`** (stdio MCP) which proxies to these routes; see [mcp-worker-bridge.md](../guides/agent-developer/mcp-worker-bridge.md) (worker-mediated MCP).
 
 ### MCP capability matrix (stdio `hive` server)
@@ -242,7 +244,7 @@ Agent-facing tools use **`hive-worker mcp`** (stdio MCP) which proxies to these 
 | `documents.search` / `documents.indexStats` | Worker HTTP call to **`HIVE_MCP_DOCS_URL`** (gateway → DocIndex MCP) |
 | Dynamic WASM tools | In-process wazero under `skills/` |
 
-**Deferred:** **request_deploy** / supply-chain deploy of other agents or images from the worker surface—see [DRONE-SPEC.md](../../doc/DRONE-SPEC.md) §7 (*Deferred MCP-shaped capabilities*).
+**request_deploy (optional):** Grant-based image pull when `HIVE_REQUEST_DEPLOY_ENABLED` is set on API and worker. See [DRONE-SPEC.md](../../doc/DRONE-SPEC.md) §7, [ADR 006](../../doc/adr/006-request-deploy.md), and [threat-model-request-deploy.md](../../doc/plans/threat-model-request-deploy.md).
 
 ### HiveWorkerPool MCP wiring (Kubernetes operator)
 
@@ -256,6 +258,10 @@ When several indexers match the company, set **`spec.codeIndexerName`** / **`spe
 ### Multi-instance / load balancing
 
 The link registry is **in-memory per server process**. If you run multiple API replicas **without** sticky sessions or a shared registry, `connected` may be **false on one replica** while the worker is actually connected to another. Prefer observing connection state from the same instance that terminates WebSockets, or treat `connected` as best-effort until a shared signal (e.g. future worker heartbeat row) exists.
+
+**Run delivery across replicas:** Set **`HIVE_WORKER_DELIVERY_BUS_URL`** to a **Redis** URL (same logical DB for all API processes) so a heartbeat/run published on replica A can reach the WebSocket on replica B. Without it, runs may queue on the wrong process and never dispatch. See [ADR 003](../../doc/adr/003-unified-managed-worker-links.md) and [DRONE-SPEC.md](../../doc/DRONE-SPEC.md) §11.
+
+**Placement v1:** When **`HIVE_PLACEMENT_V1_ENABLED=true`** on the control plane (after migrations for `run_placements` / bindings), each managed-worker run includes **`placementId`** and **`expectedWorkerInstanceId`** in the WebSocket `run` message; the worker must ack **`placement_mismatch`** if its persisted instance id differs. Enable only after the worker fleet supports placement hello capabilities and ack behavior ([worker-pool-and-placement.md](../../doc/plans/worker-pool-and-placement.md)).
 
 Enrollment tokens and agent lists still come from **PostgreSQL** and are consistent across replicas.
 

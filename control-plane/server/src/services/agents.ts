@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import {
   agents,
+  companyMemberships,
   agentConfigRevisions,
   agentApiKeys,
   droneProvisioningTokens,
@@ -35,6 +36,7 @@ import { reconcileWorkerIdentitySlotsForCompany } from "./worker-identity-reconc
 import { parseDroneFromAgentMetadata } from "../workers/worker-hello.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
+import { cancelInFlightPlacementsForDrainingWorker } from "./drain-placement-cancel-registry.js";
 
 /** Postgres undefined_column — e.g. `worker_instances` migration 0035 not applied yet. */
 function isPgUndefinedColumnError(err: unknown): boolean {
@@ -223,9 +225,15 @@ export function deduplicateAgentName(
 
 export function agentService(
   db: Db,
-  svcOpts?: { drainAutoEvacuateEnabled?: boolean; workerIdentityAutomationEnabled?: boolean },
+  svcOpts?: {
+    drainAutoEvacuateEnabled?: boolean;
+    workerIdentityAutomationEnabled?: boolean;
+    /** When true (default), marking a worker instance draining cancels queued/running placements on that instance. */
+    drainCancelInFlightPlacementsEnabled?: boolean;
+  },
 ) {
   const drainAutoEvacuateEnabled = svcOpts?.drainAutoEvacuateEnabled === true;
+  const drainCancelInFlightPlacementsEnabled = svcOpts?.drainCancelInFlightPlacementsEnabled !== false;
   const workerIdentityAutomationEnabled = svcOpts?.workerIdentityAutomationEnabled !== false;
   const workerAssignment = createWorkerAssignmentService(db);
 
@@ -391,6 +399,23 @@ export function agentService(
       .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions })
       .returning()
       .then((rows) => rows[0]);
+
+    await db
+      .insert(companyMemberships)
+      .values({
+        companyId,
+        principalType: "agent",
+        principalId: created.id,
+        status: "active",
+        membershipRole: "operator",
+      })
+      .onConflictDoNothing({
+        target: [
+          companyMemberships.companyId,
+          companyMemberships.principalType,
+          companyMemberships.principalId,
+        ],
+      });
 
     return normalizeAgentRow(created);
   }
@@ -858,6 +883,9 @@ export function agentService(
       await db.update(workerInstances).set(updates).where(eq(workerInstances.id, workerInstanceId));
 
       let drainEvacuation: { evacuatedAgentIds: string[]; skippedAgentIds: string[] } | undefined;
+      if (!wasDraining && nowDraining && drainCancelInFlightPlacementsEnabled) {
+        await cancelInFlightPlacementsForDrainingWorker(db, workerInstanceId);
+      }
       if (!wasDraining && nowDraining && drainAutoEvacuateEnabled) {
         drainEvacuation = await workerAssignment.evacuateAutomaticAgentsOffDrainingInstance(
           companyId,

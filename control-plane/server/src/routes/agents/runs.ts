@@ -5,7 +5,7 @@ import { agents as agentsTable, heartbeatRuns } from "@hive/db";
 import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
 import { ISSUE_STATUSES_WORKABLE_FOR_WEBHOOK, ISSUE_STATUS_IN_PROGRESS } from "@hive/shared";
 import { getCurrentPrincipal } from "../../auth/principal.js";
-import { assertBoard, assertCompanyAccess } from "../authz.js";
+import { assertCompanyPermission, assertCompanyRead } from "../authz.js";
 import { redactCurrentUserValue } from "../../log-redaction.js";
 import { redactEventPayload } from "../../redaction.js";
 import type { LogActivityInput } from "../../services/activity-log.js";
@@ -82,8 +82,6 @@ export type AgentRunsDeps = {
   heartbeatService: HeartbeatService;
   agentService: AgentService;
   issueService: IssueService;
-  assertBoard: typeof assertBoard;
-  assertCompanyAccess: typeof assertCompanyAccess;
   logActivity: (input: LogActivityInput) => Promise<void>;
 };
 
@@ -93,14 +91,12 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
     heartbeatService: heartbeat,
     agentService: svc,
     issueService: issueSvc,
-    assertBoard: assertBoardFn,
-    assertCompanyAccess: assertCompanyAccessFn,
     logActivity: logActivityFn,
   } = deps;
 
   router.get("/companies/:companyId/heartbeat-runs", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccessFn(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const parsed = listHeartbeatRunsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -112,7 +108,7 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
 
   router.get("/companies/:companyId/live-runs", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccessFn(req, companyId);
+    await assertCompanyRead(db, req, companyId);
 
     const parsed = liveRunsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -197,13 +193,18 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
       res.status(404).json({ error: "Heartbeat run not found" });
       return;
     }
-    assertCompanyAccessFn(req, run.companyId);
+    await assertCompanyRead(db, req, run.companyId);
     res.json(redactCurrentUserValue(run));
   });
 
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {
-    assertBoardFn(req);
     const runId = req.params.runId as string;
+    const preRun = await heartbeat.getRun(runId);
+    if (!preRun) {
+      res.status(404).json({ error: "Heartbeat run not found" });
+      return;
+    }
+    await assertCompanyPermission(db, req, preRun.companyId, "runs:board");
     const run = await heartbeat.cancelRun(runId);
 
     if (run) {
@@ -228,7 +229,7 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
       res.status(404).json({ error: "Heartbeat run not found" });
       return;
     }
-    assertCompanyAccessFn(req, run.companyId);
+    await assertCompanyRead(db, req, run.companyId);
 
     const parsed = heartbeatRunEventsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -252,7 +253,7 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
       res.status(404).json({ error: "Heartbeat run not found" });
       return;
     }
-    assertCompanyAccessFn(req, run.companyId);
+    await assertCompanyRead(db, req, run.companyId);
 
     const parsed = heartbeatRunLogQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -277,7 +278,7 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccessFn(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
 
     const liveRuns = await db
       .select({
@@ -316,7 +317,7 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
       res.status(404).json({ error: "Issue not found" });
       return;
     }
-    assertCompanyAccessFn(req, issue.companyId);
+    await assertCompanyRead(db, req, issue.companyId);
 
     let run = issue.executionRunId ? await heartbeat.getRun(issue.executionRunId) : null;
     if (run && run.status !== "queued" && run.status !== "running") {
@@ -357,7 +358,7 @@ export function registerAgentRunsRoutes(router: Router, deps: AgentRunsDeps): vo
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccessFn(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     const pRun = getCurrentPrincipal(req);
     if (pRun?.type === "agent" && pRun.id !== id) {
       res.status(403).json({ error: "Agent can only request own work-items" });

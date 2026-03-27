@@ -330,6 +330,34 @@
       "when": 1775400000000,
       "tag": "0046_worker_api_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1775500000000,
+      "tag": "0047_cost_events_gateway_metering_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1775600000000,
+      "tag": "0048_vcs_webhooks_issue_branch",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1775700000000,
+      "tag": "0049_rbac_membership_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1775800000000,
+      "tag": "0050_plugin_registry",
+      "breakpoints": true
     }
   ]
 }

@@ -52,10 +52,10 @@ func getAdapterAgent(key string) string {
 
 // provisioningAcpxExecutor provisions the acpx binary then runs AcpxExecutor with the resolved path.
 type provisioningAcpxExecutor struct {
-	adapterKey   string
-	acpxPath     string
-	agentName    string
-	provisioner  provision.Provisioner
+	adapterKey  string
+	acpxPath    string
+	agentName   string
+	provisioner provision.Provisioner
 }
 
 func (p *provisioningAcpxExecutor) Run(ctx context.Context, payload *executor.Payload, workspaceDir string) ([]byte, []byte, error) {
@@ -122,7 +122,7 @@ func newRegistryFromEnv(prov provision.Provisioner) *Registry {
 			}
 			continue
 		}
-		if executor.IsContainerEnabled(key) {
+		if executor.UseContainerForAdapter(key) {
 			if img := executor.GetAdapterImage(key); img != "" {
 				byKey[key] = &executor.ContainerExecutor{Image: img, Command: val}
 				continue

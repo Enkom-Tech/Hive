@@ -12,7 +12,7 @@ import { getCurrentPrincipal } from "../auth/principal.js";
 import { validate } from "../middleware/validate.js";
 import { projectService, logActivity } from "../services/index.js";
 import { badRequest, conflict } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyAccess, assertCompanyPermission, assertCompanyRead, getActorInfo } from "./authz.js";
 
 export function projectRoutes(db: Db) {
   const router = Router();
@@ -25,7 +25,7 @@ export function projectRoutes(db: Db) {
     }
     const requestedCompanyId = parsed.data.companyId ?? null;
     if (requestedCompanyId) {
-      assertCompanyAccess(req, requestedCompanyId);
+      await assertCompanyRead(db, req, requestedCompanyId);
       return requestedCompanyId;
     }
     const p = getCurrentPrincipal(req);
@@ -57,7 +57,7 @@ export function projectRoutes(db: Db) {
 
   router.get("/companies/:companyId/projects", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const result = await svc.list(companyId);
     res.json(result);
   });
@@ -69,13 +69,13 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, project.companyId);
+    await assertCompanyRead(db, req, project.companyId);
     res.json(project);
   });
 
   router.post("/companies/:companyId/projects", validate(createProjectSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "projects:write");
     type CreateProjectPayload = Parameters<typeof svc.create>[1] & {
       workspace?: Parameters<typeof svc.createWorkspace>[1];
     };
@@ -118,7 +118,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "projects:write");
     const project = await svc.update(id, req.body);
     if (!project) {
       res.status(404).json({ error: "Project not found" });
@@ -147,7 +147,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyRead(db, req, existing.companyId);
     const workspaces = await svc.listWorkspaces(id);
     res.json(workspaces);
   });
@@ -159,7 +159,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "projects:write");
     const workspace = await svc.createWorkspace(id, req.body);
     if (!workspace) {
       res.status(422).json({ error: "Invalid project workspace payload" });
@@ -197,7 +197,7 @@ export function projectRoutes(db: Db) {
         res.status(404).json({ error: "Project not found" });
         return;
       }
-      assertCompanyAccess(req, existing.companyId);
+      await assertCompanyPermission(db, req, existing.companyId, "projects:write");
       const workspaceExists = (await svc.listWorkspaces(id)).some((workspace) => workspace.id === workspaceId);
       if (!workspaceExists) {
         res.status(404).json({ error: "Project workspace not found" });
@@ -236,7 +236,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "projects:write");
     const workspace = await svc.removeWorkspace(id, workspaceId);
     if (!workspace) {
       res.status(404).json({ error: "Project workspace not found" });
@@ -268,7 +268,7 @@ export function projectRoutes(db: Db) {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "projects:write");
     const project = await svc.remove(id);
     if (!project) {
       res.status(404).json({ error: "Project not found" });

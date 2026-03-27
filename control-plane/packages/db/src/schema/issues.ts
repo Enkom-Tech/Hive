@@ -45,6 +45,8 @@ export const issues = pgTable(
     requiresQualityReview: boolean("requires_quality_review"),
     assigneeAdapterOverrides: jsonb("assignee_adapter_overrides").$type<Record<string, unknown>>(),
     executionWorkspaceSettings: jsonb("execution_workspace_settings").$type<Record<string, unknown>>(),
+    /** Last realized git branch for isolated execution workspace (VCS merge webhook teardown). */
+    executionWorkspaceBranch: text("execution_workspace_branch"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),

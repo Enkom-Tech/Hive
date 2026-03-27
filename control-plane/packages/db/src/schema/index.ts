@@ -48,3 +48,6 @@ export { webhookDeliveries } from "./webhook_deliveries.js";
 export { intents } from "./intents.js";
 export { intentLinks } from "./intent_links.js";
 export { workerApiIdempotency } from "./worker_api_idempotency.js";
+export { vcsWebhookDeliveries } from "./vcs_webhook_deliveries.js";
+export { pluginPackages } from "./plugin_packages.js";
+export { pluginInstances } from "./plugin_instances.js";

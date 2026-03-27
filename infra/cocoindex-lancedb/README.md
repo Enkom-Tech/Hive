@@ -5,7 +5,7 @@ Complete Docker + K3s setup for local Git repository indexing with Hive integrat
 ## Overview
 
 This stack provides:
-- **CocoIndex v1**: Main indexing service with tree-sitter chunking
+- **CocoIndex v1**: Main indexing service; optional **`COCOINDEX_AST_CHUNK_PY=1`** uses Python `ast` top-level splits for `.py` (line-based fallback otherwise). Full tree-sitter grammars remain optional future work.
 - **LanceDB**: Embedded vector database for code embeddings
 - **llama.cpp**: Qwen3-Embedding-8B (4096-dim, 32K context) for embeddings
 - **Hive Integration**: K3s operator + CRDs for auto-indexing
@@ -205,29 +205,29 @@ See [WSL2-SETUP.md](WSL2-SETUP.md) for detailed WSL2 installation instructions i
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         Hive Control Plane                    │
-│                    (Node.js + PostgreSQL)                     │
+│                     Hive Control Plane                      │
+│                    (Node.js + PostgreSQL)                   │
 └──────────────────────┬──────────────────────────────────────┘
                        │ MCP / REST (standalone / illustrative)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                      CocoIndex API (8080)                     │
+│                      CocoIndex API (8080)                   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │ File Watcher │  │ Tree-sitter  │  │ REST API     │       │
-│  │ (Incremental)│  │ Chunking     │  │ (FastAPI)    │       │
+│  │ File Watcher │  │ AST / line   │  │ REST API     │       │
+│  │ (Incremental)│  │ chunking     │  │ (FastAPI)    │       │
 │  └──────────────┘  └──────────────┘  └──────────────┘       │
 └──────────────────────┬──────────────────────────────────────┘
                        │
         ┌──────────────┼──────────────┐
-        ▼              ▼              ▼
+        ▼             ▼             ▼
 ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
 │  LanceDB     │ │ llama.cpp    │ │ Repos Volume │
 │  (8890)      │ │ (8081)       │ │ (/data/repos)│
-│  ┌──────────┐ │ │ ┌──────────┐ │ │              │
-│  │ Vector   │ │ │ │ Qwen3-   │ │ │              │
-│  │ Index    │ │ │ │ Embedding│ │ │              │
-│  │ (IVF-PQ) │ │ │ │ 8B Q4_K_M│ │ │              │
-│  └──────────┘ │ │ └──────────┘ │ │              │
+│ ┌──────────┐ │ │ ┌──────────┐ │ │              │
+│ │ Vector   │ │ │ │ Qwen3-   │ │ │              │
+│ │ Index    │ │ │ │ Embedding│ │ │              │
+│ │ (IVF-PQ) │ │ │ │ 8B Q4_K_M│ │ │              │
+│ └──────────┘ │ │ └──────────┘ │ │              │
 └──────────────┘ └──────────────┘ └──────────────┘
 ```
 

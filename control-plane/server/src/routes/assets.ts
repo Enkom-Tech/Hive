@@ -5,7 +5,7 @@ import { createAssetImageMetadataSchema } from "@hive/shared";
 import type { StorageService } from "../storage/types.js";
 import { getMaxAttachmentBytes } from "../attachment-types.js";
 import { assetService, logActivity } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "./authz.js";
 const ALLOWED_IMAGE_CONTENT_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -33,7 +33,7 @@ export function assetRoutes(db: Db, storage: StorageService) {
 
   router.post("/companies/:companyId/assets/images", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "issues:write");
 
     try {
       await runSingleFileUpload(req, res);
@@ -132,7 +132,7 @@ export function assetRoutes(db: Db, storage: StorageService) {
       res.status(404).json({ error: "Asset not found" });
       return;
     }
-    assertCompanyAccess(req, asset.companyId);
+    await assertCompanyRead(db, req, asset.companyId);
 
     const object = await storage.getObject(asset.companyId, asset.objectKey);
     res.setHeader("Content-Type", asset.contentType || object.contentType || "application/octet-stream");

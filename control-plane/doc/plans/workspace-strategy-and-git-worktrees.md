@@ -1264,6 +1264,15 @@ Acceptance:
 3. Start with conservative defaults:
    - do not auto-delete anything unless explicitly configured
 
+### Implementation triggers (control plane + worker)
+
+| Trigger | Behavior |
+|---------|----------|
+| **Issue terminal status** (`done`, `cancelled`) with isolated worktree | Run optional `teardownCommand` from project/issue policy, then `git worktree remove` (best-effort, idempotent). |
+| **Run cancelled** | Teardown is **not** tied to cancel by default; worktree remains until issue completes or manual cleanup. |
+| **Retention TTL** | Future: optional TTL table; v1 relies on `on_done` / `manual` only. |
+| **Teardown command failure** | Log activity `execution_workspace.teardown_failed`; do not block issue transition; operator may retry via documented script. |
+
 Acceptance:
 
 - cleanup is safe and reversible by default

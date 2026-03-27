@@ -11,6 +11,20 @@ export interface CostDateRange {
 export function costService(db: Db) {
   return {
     createEvent: async (companyId: string, data: Omit<typeof costEvents.$inferInsert, "companyId">) => {
+      const dedupeKey =
+        typeof data.gatewayMeteringKey === "string" && data.gatewayMeteringKey.trim() !== ""
+          ? data.gatewayMeteringKey.trim()
+          : null;
+      if (dedupeKey) {
+        const existing = await db
+          .select()
+          .from(costEvents)
+          .where(and(eq(costEvents.companyId, companyId), eq(costEvents.gatewayMeteringKey, dedupeKey)))
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (existing) return existing;
+      }
+
       const agentRowId = data.agentId;
       if (agentRowId) {
         const agent = await db
@@ -25,11 +39,26 @@ export function costService(db: Db) {
         }
       }
 
-      const event = await db
-        .insert(costEvents)
-        .values({ ...data, companyId })
-        .returning()
-        .then((rows) => rows[0]);
+      let event: typeof costEvents.$inferSelect;
+      try {
+        event = await db
+          .insert(costEvents)
+          .values({ ...data, companyId })
+          .returning()
+          .then((rows) => rows[0]);
+      } catch (err) {
+        const code = err && typeof err === "object" && "code" in err ? String((err as { code?: string }).code) : "";
+        if (dedupeKey && code === "23505") {
+          const again = await db
+            .select()
+            .from(costEvents)
+            .where(and(eq(costEvents.companyId, companyId), eq(costEvents.gatewayMeteringKey, dedupeKey)))
+            .limit(1)
+            .then((rows) => rows[0] ?? null);
+          if (again) return again;
+        }
+        throw err;
+      }
 
       if (event.agentId) {
         await db
@@ -147,9 +176,13 @@ export function costService(db: Db) {
         .where(and(...runConditions))
         .groupBy(heartbeatRuns.agentId);
 
-      const runRowsByAgent = new Map(runRows.map((row) => [row.agentId, row]));
+      const runRowsByAgent = new Map(
+        runRows
+          .filter((row): row is (typeof row & { agentId: string }) => row.agentId != null)
+          .map((row) => [row.agentId, row]),
+      );
       return costRows.map((row) => {
-        const runRow = runRowsByAgent.get(row.agentId);
+        const runRow = row.agentId != null ? runRowsByAgent.get(row.agentId) : undefined;
         return {
           ...row,
           apiRunCount: runRow?.apiRunCount ?? 0,

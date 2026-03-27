@@ -4,7 +4,7 @@ import { costsDateRangeQuerySchema, createCostEventSchema, updateBudgetSchema } 
 import { validate } from "../middleware/validate.js";
 import { costService, companyService, agentService, logActivity } from "../services/index.js";
 import { getCurrentPrincipal } from "../auth/principal.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyAccess, assertCompanyPermission, getActorInfo } from "./authz.js";
 
 export function costRoutes(db: Db) {
   const router = Router();
@@ -61,7 +61,7 @@ export function costRoutes(db: Db) {
 
   router.get("/companies/:companyId/costs/summary", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "costs:read");
     const parsed = costsDateRangeQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -74,7 +74,7 @@ export function costRoutes(db: Db) {
 
   router.get("/companies/:companyId/costs/by-agent", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "costs:read");
     const parsed = costsDateRangeQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -93,7 +93,7 @@ export function costRoutes(db: Db) {
 
   router.get("/companies/:companyId/costs/by-project", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "costs:read");
     const parsed = costsDateRangeQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -106,7 +106,7 @@ export function costRoutes(db: Db) {
 
   router.get("/companies/:companyId/costs/series", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "costs:read");
     const parsed = costsDateRangeQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -127,7 +127,7 @@ export function costRoutes(db: Db) {
 
   router.get("/companies/:companyId/costs/by-model", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "costs:read");
     const parsed = costsDateRangeQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
@@ -139,8 +139,8 @@ export function costRoutes(db: Db) {
   });
 
   router.patch("/companies/:companyId/budgets", validate(updateBudgetSchema), async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
+    await assertCompanyPermission(db, req, companyId, "costs:manage");
     const company = await companies.update(companyId, { budgetMonthlyCents: req.body.budgetMonthlyCents });
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -174,6 +174,8 @@ export function costRoutes(db: Db) {
         res.status(403).json({ error: "Agent can only change its own budget" });
         return;
       }
+    } else {
+      await assertCompanyPermission(db, req, agent.companyId, "costs:manage");
     }
 
     const updated = await agents.update(agentId, { budgetMonthlyCents: req.body.budgetMonthlyCents });

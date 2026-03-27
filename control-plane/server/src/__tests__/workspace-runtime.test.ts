@@ -8,6 +8,7 @@ import {
   WorkspaceRuntimeManager,
   normalizeAdapterManagedRuntimeServices,
   realizeExecutionWorkspace,
+  runGitWorktreeTeardownSteps,
   type RealizedExecutionWorkspace,
 } from "../services/workspace-runtime.ts";
 
@@ -476,4 +477,25 @@ describe("normalizeAdapterManagedRuntimeServices", () => {
     });
     expect(first[0]?.id).toBe(second[0]?.id);
   });
+});
+
+describe("runGitWorktreeTeardownSteps", () => {
+  it.skipIf(process.platform === "win32")(
+    "removes an existing git worktree when no teardown command is set",
+    async () => {
+      const repoRoot = await createTempRepo();
+      const worktreeParent = path.join(repoRoot, ".hive", "worktrees");
+      await fs.mkdir(worktreeParent, { recursive: true });
+      const worktreePath = path.join(worktreeParent, "teardown-branch");
+      await runGit(repoRoot, ["worktree", "add", "-b", "teardown-branch", worktreePath, "HEAD"]);
+
+      const r = await runGitWorktreeTeardownSteps({
+        repoRoot,
+        worktreePath,
+        env: { ...process.env },
+      });
+      expect(r).toEqual({ ok: true });
+      await expect(fs.stat(worktreePath)).rejects.toThrow();
+    },
+  );
 });

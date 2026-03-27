@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { approvalsApi } from "../api/approvals";
 import { accessApi } from "../api/access";
-import { ApiError } from "../api/client";
+import { sidebarBadgesApi } from "../api/sidebarBadges";
 import { dashboardApi } from "../api/dashboard";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
@@ -302,19 +302,17 @@ export function Inbox() {
     isLoading: isJoinRequestsLoading,
   } = useQuery({
     queryKey: queryKeys.access.joinRequests(selectedCompanyId!),
-    queryFn: async () => {
-      try {
-        return await accessApi.listJoinRequests(selectedCompanyId!, "pending_approval");
-      } catch (err) {
-        if (err instanceof ApiError && (err.status === 403 || err.status === 401)) {
-          return [];
-        }
-        throw err;
-      }
-    },
+    queryFn: () => accessApi.listJoinRequests(selectedCompanyId!, "pending_approval"),
     enabled: !!selectedCompanyId,
-    retry: false,
   });
+
+  const { data: sidebarBadges } = useQuery({
+    queryKey: queryKeys.sidebarBadges(selectedCompanyId!),
+    queryFn: () => sidebarBadgesApi.get(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    staleTime: 30_000,
+  });
+  const canApproveJoinRequests = sidebarBadges?.canApproveJoinRequests ?? false;
 
   const { data: dashboard, isLoading: isDashboardLoading } = useQuery({
     queryKey: queryKeys.dashboard(selectedCompanyId!),
@@ -764,22 +762,30 @@ export function Inbox() {
                         <p className="text-xs text-muted-foreground">adapter: {joinRequest.adapterType}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={approveJoinMutation.isPending || rejectJoinMutation.isPending}
-                        onClick={() => rejectJoinMutation.mutate(joinRequest)}
-                      >
-                        Reject
-                      </Button>
-                      <Button
-                        size="sm"
-                        disabled={approveJoinMutation.isPending || rejectJoinMutation.isPending}
-                        onClick={() => approveJoinMutation.mutate(joinRequest)}
-                      >
-                        Approve
-                      </Button>
+                    <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
+                      {canApproveJoinRequests ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={approveJoinMutation.isPending || rejectJoinMutation.isPending}
+                            onClick={() => rejectJoinMutation.mutate(joinRequest)}
+                          >
+                            Reject
+                          </Button>
+                          <Button
+                            size="sm"
+                            disabled={approveJoinMutation.isPending || rejectJoinMutation.isPending}
+                            onClick={() => approveJoinMutation.mutate(joinRequest)}
+                          >
+                            Approve
+                          </Button>
+                        </>
+                      ) : (
+                        <p className="max-w-[220px] text-right text-xs text-muted-foreground">
+                          Only members with join approval permission can approve or reject.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>

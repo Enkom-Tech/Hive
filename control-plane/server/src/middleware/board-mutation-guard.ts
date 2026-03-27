@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from "express";
-import { getCurrentPrincipal } from "../auth/principal.js";
+import { getCurrentPrincipal, isLocalImplicit } from "../auth/principal.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const DEFAULT_DEV_ORIGINS = [
@@ -52,10 +52,9 @@ export function boardMutationGuard(): RequestHandler {
       return;
     }
 
-    // System principal (local_trusted) uses implicit board for localhost-only development.
-    // In this mode, origin/referer headers can be omitted by some clients for multipart
-    // uploads; do not block those mutations.
-    if (p.type === "system") {
+    // Local trusted board (legacy system or persisted `local-board` user): localhost-only;
+    // origin/referer may be omitted for multipart uploads.
+    if (isLocalImplicit(req)) {
       next();
       return;
     }

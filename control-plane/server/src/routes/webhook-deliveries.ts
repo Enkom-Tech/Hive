@@ -5,7 +5,7 @@ import { and, desc, eq, gte } from "drizzle-orm";
 import { listWebhookDeliveriesQuerySchema, webhookDeliveryRetrySchema } from "@hive/shared";
 import { validate } from "../middleware/validate.js";
 import { deliverWorkAvailable, issueService, logActivity, WORKABLE_STATUSES_FOR_WEBHOOK } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyRead, getActorInfo } from "./authz.js";
 import { unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 
@@ -15,7 +15,7 @@ export function webhookDeliveryRoutes(db: Db) {
 
   router.get("/companies/:companyId/webhook-deliveries", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
 
     const parsed = listWebhookDeliveriesQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -62,7 +62,7 @@ export function webhookDeliveryRoutes(db: Db) {
     validate(webhookDeliveryRetrySchema),
     async (req, res) => {
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyRead(db, req, companyId);
 
       const { issueId, agentId } = req.body as { issueId: string; agentId: string };
 

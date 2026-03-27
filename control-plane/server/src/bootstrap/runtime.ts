@@ -9,6 +9,7 @@ import { attachWorkerLinkUpgrade, trySendJsonToWorkerInstance } from "../workers
 import { initWorkerDeliveryRedis } from "../workers/worker-delivery-redis.js";
 import { setupLiveEventsWebSocketServer } from "../realtime/live-events-ws.js";
 import { agentService, heartbeatService, reconcilePersistedRuntimeServicesOnStartup } from "../services/index.js";
+import { setDrainPlacementCancelRun } from "../services/drain-placement-cancel-registry.js";
 import { logger } from "../middleware/logger.js";
 
 export interface RuntimeBootstrapResult {
@@ -24,6 +25,7 @@ export async function bootstrapRuntime(
   },
 ): Promise<RuntimeBootstrapResult> {
   const heartbeat = heartbeatService(db as any);
+  setDrainPlacementCancelRun((runId) => heartbeat.cancelRun(runId));
   const agents = agentService(db as Db, {
     workerIdentityAutomationEnabled: config.workerIdentityAutomationEnabled,
     drainAutoEvacuateEnabled: config.drainAutoEvacuateEnabled,

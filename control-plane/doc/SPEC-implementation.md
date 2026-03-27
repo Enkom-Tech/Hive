@@ -74,21 +74,24 @@ Implementation extends this baseline into a company-centric, governance-aware co
 - Company-scoped SSE stream (`GET /companies/:companyId/events`) for broad real-time updates (activity, heartbeat, agent events)
 - Workload/capacity API (`GET /companies/:companyId/workload`) for throttle signals (normal | throttle | shed | pause) so agents and gateways can back off when under load
 - Auditable activity log for all mutating actions
+- **Multi-human RBAC:** viewer / operator / admin membership roles, `PermissionKey` enforcement on board routes (`assertCompanyPermission`), `tasks:assign_scope` chain-of-command evaluation, join inbox visibility for all company readers with approve actions gated by `joins:approve` (see `doc/plans/rbac-route-matrix.md`, `doc/plans/humans-and-permissions.md`).
+- **Plugin platform (MVP):** deployment-scoped registry (`plugin_packages` / `plugin_instances`), board lifecycle APIs under `plugins:manage`, live-event fan-out bridge for OOP supervisors, internal Bearer RPC (`HIVE_PLUGIN_HOST_SECRET`), worker-api **read-only** plugin tool catalog, versioned `@hive/plugin-sdk` (manifest + RPC client). See `doc/plugins/PLUGIN_SPEC.md`, `doc/plans/threat-model-plugins.md`.
 
 ### 5.1.1 Execution workspace
 
-Execution workspace is optional. Projects may define an execution workspace policy; issues may request isolated mode. When a run uses project/issue context that requests isolated execution, the control plane realizes an execution workspace (today: git worktree under the project repo; future: adapter-managed or remote workspace), injects `context.hiveWorkspace` (cwd, worktreePath, branchName, strategy, etc.) for the agent, and runs a project-defined provision command in that workspace when configured. Teardown and cleanup (worktree removal, cleanup policies) are not yet implemented; see `doc/experimental/issue-worktree-support.md`.
+Execution workspace is optional. Projects may define an execution workspace policy; issues may request isolated mode. When a run uses project/issue context that requests isolated execution, the control plane realizes an execution workspace (today: git worktree under the project repo; future: adapter-managed or remote workspace), injects `context.hiveWorkspace` (cwd, worktreePath, branchName, strategy, etc.) for the agent, and runs a project-defined provision command in that workspace when configured. When the project policy sets `cleanupPolicy.mode` to **`on_done`**, the control plane runs the configured teardown command (if any) and removes the git worktree after the issue reaches **`done`** or **`cancelled`**. Mode **`on_merged`** runs the same teardown for **`done`** only (skips **cancelled**). GitHub **merge** webhooks (`HIVE_VCS_GITHUB_WEBHOOK_ENABLED`) can drive `on_merged` teardown when `issues.execution_workspace_branch` matches the merged head ref; automatic remote branch deletion remains future work — see `doc/experimental/issue-worktree-support.md` and `doc/plans/workspace-strategy-and-git-worktrees.md` (Phase 8).
 
 ## 5.2 Out of Scope
 
-- Plugin framework and third-party extension SDK
 - Revenue/expense accounting beyond model/token costs
 - Knowledge base subsystem
-- Multi-board governance or role-based human permission granularity
+- Plugin marketplace, third-party arbitrary DB migrations, and iframe UI slots in plugins (v1 deferred per `PLUGIN_SPEC.md`)
+- Full OOP plugin process supervisor with cgroups/mTLS (host RPC + schema/SDK shipped; hardening phases documented in `threat-model-plugins.md`)
 
-### 5.2.1 Future: Role-based access (RBAC)
+### 5.2.1 RBAC and plugins — done criteria
 
-When adding multiple human roles, use three levels: (1) **viewer** — read-only company data; (2) **operator** — viewer plus write tasks, agents, heartbeat; (3) **admin** — full company including settings and keys. Use MC-style role-based route guards and permission matrix as reference. Extend existing `companyMemberships` / `principalPermissionGrants` and `access.canUser` / `hasPermission`; keep company scoping and activity logging for all mutations. See `doc/plans/humans-and-permissions.md` for the full design and current implementation status.
+- **RBAC:** Every board mutating route declares a `PermissionKey` (or documented `assertBoard` / `assertInstanceAdmin` exception); integration tests cover viewer-deny / operator-allow patterns for representative routes; `doc/plans/rbac-route-matrix.md` updated when routes change.
+- **Plugins:** Migration `0050_plugin_registry` applied; operators can register manifests via board API; `rpc.ping` succeeds only when `rpc.ping` capability is stored; worker-api exposes plugin tool names without bypassing route-scoped checks.
 
 ## 6. Architecture
 
@@ -582,7 +585,7 @@ See [doc/MANAGED-WORKER-ARCHITECTURE.md](MANAGED-WORKER-ARCHITECTURE.md) for the
 
 The control plane has a single adapter type: **managed worker**. There is no registry of process/http/claude-local/codex-local/cursor/openclaw_gateway adapters. All invocation and status flows go through the worker. All communication uses a single WebSocket link (worker connects to control plane); see DRONE-SPEC and MANAGED-WORKER-ARCHITECTURE. The drone (worker) implementation contract is in [doc/DRONE-SPEC.md](DRONE-SPEC.md).
 
-**Worker MCP and `/api/worker-api` contract matrix** (tools, transports, authz, shipped vs deferred): [DRONE-SPEC.md §7](DRONE-SPEC.md#7-tools--mcp-agents-to-control-plane-via-drone) (*Worker MCP and worker-api contract matrix*). Issue create/patch (non-status) and agent hire are on worker-api with board parity; **request_deploy** and similar remain under *Deferred MCP-shaped capabilities* (intentional, not a missing integration). **Alerts:** worker-api 401/403 and indexer MCP — [docs/deploy/security-runbook.md](docs/deploy/security-runbook.md) (*Alerts: worker MCP and indexers*).
+**Worker MCP and `/api/worker-api` contract matrix** (tools, transports, authz, shipped vs deferred): [DRONE-SPEC.md §7](DRONE-SPEC.md#7-tools--mcp-agents-to-control-plane-via-drone) (*Worker MCP and worker-api contract matrix*). Issue create/patch (non-status) and agent hire are on worker-api with board parity; **request_deploy** is **optional** behind `HIVE_REQUEST_DEPLOY_ENABLED` (grant-based pull; see [ADR 006](adr/006-request-deploy.md)). **Alerts:** worker-api 401/403 and indexer MCP — [docs/deploy/security-runbook.md](docs/deploy/security-runbook.md) (*Alerts: worker MCP and indexers*).
 
 ## 11.2 Context Delivery
 

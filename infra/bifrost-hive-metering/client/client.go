@@ -79,7 +79,8 @@ func (c *Client) LookupCompany(ctx context.Context, keyHash string) (string, err
 }
 
 // PostGatewayAggregate sends one cost row (same shape as model-gateway-go).
-func (c *Client) PostGatewayAggregate(ctx context.Context, companyID, model string, inputTokens, outputTokens, costCents int) error {
+// When idempotencyKey is non-empty, duplicate posts return the existing row (Hive dedupes).
+func (c *Client) PostGatewayAggregate(ctx context.Context, companyID, model string, inputTokens, outputTokens, costCents int, idempotencyKey string) error {
 	base := c.trimBase()
 	if base == "" {
 		return fmt.Errorf("empty ControlPlaneBaseURL")
@@ -89,15 +90,18 @@ func (c *Client) PostGatewayAggregate(ctx context.Context, companyID, model stri
 		prov = "bifrost"
 	}
 	body := map[string]any{
-		"companyId":     companyID,
-		"source":        "gateway_aggregate",
-		"agentId":       nil,
-		"provider":      prov,
-		"model":         model,
-		"inputTokens":   inputTokens,
-		"outputTokens":  outputTokens,
-		"costCents":     costCents,
-		"occurredAt":    time.Now().UTC().Format(time.RFC3339Nano),
+		"companyId":    companyID,
+		"source":       "gateway_aggregate",
+		"agentId":      nil,
+		"provider":     prov,
+		"model":        model,
+		"inputTokens":  inputTokens,
+		"outputTokens": outputTokens,
+		"costCents":    costCents,
+		"occurredAt":   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if strings.TrimSpace(idempotencyKey) != "" {
+		body["idempotencyKey"] = strings.TrimSpace(idempotencyKey)
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

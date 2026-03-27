@@ -45,6 +45,9 @@ func (e *ContainerExecutor) Run(ctx context.Context, payload *Payload, workspace
 	if e.Image == "" || e.Command == "" {
 		return nil, nil, nil
 	}
+	if err := EnforceContainerImagePolicy(e.Image); err != nil {
+		return nil, nil, err
+	}
 	if workspaceDir == "" {
 		workspaceDir = os.Getenv("HIVE_WORKSPACE")
 		if workspaceDir == "" {
@@ -127,6 +130,20 @@ func IsContainerEnabled(key string) bool {
 	v := os.Getenv("HIVE_ADAPTER_" + key + "_CONTAINER")
 	v = strings.TrimSpace(strings.ToLower(v))
 	return v == "1" || v == "true"
+}
+
+func autosandboxDefaultOn() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("HIVE_AUTOSANDBOX_DEFAULT")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+// UseContainerForAdapter is true when an adapter image is configured and either explicit CONTAINER=1
+// or HIVE_AUTOSANDBOX_DEFAULT enables container runs (staged production hardening).
+func UseContainerForAdapter(key string) bool {
+	if GetAdapterImage(key) == "" {
+		return false
+	}
+	return IsContainerEnabled(key) || autosandboxDefaultOn()
 }
 
 // GetAdapterImage returns HIVE_ADAPTER_<key>_IMAGE.

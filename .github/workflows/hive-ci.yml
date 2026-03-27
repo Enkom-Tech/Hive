@@ -25,6 +25,8 @@ jobs:
           export PATH="$(go env GOPATH)/bin:$PATH"
           cd infra/worker
           golangci-lint run ./...
+      - name: Drone reference env security hints
+        run: bash infra/worker/scripts/check-drone-security-hints.sh
       - name: Lint manifests
         run: |
           export PATH="$(go env GOPATH)/bin:$PATH"
@@ -104,6 +106,33 @@ jobs:
         run: |
           cd infra/operator
           go test ./controllers/... -race -count=1
+  e2e-k3d:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: infra-e2e-k3d-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version: '1.26.1'
+      - name: Install k3d
+        run: |
+          curl -sSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.8.3 bash
+          k3d version
+      - name: Infra k3d E2E
+        run: |
+          cd infra
+          make e2e
+      - name: Upload e2e diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: infra-e2e-diagnostics
+          path: |
+            infra/e2e/**/*.log
+          if-no-files-found: ignore
   security:
     runs-on: ubuntu-latest
     steps:
@@ -235,7 +264,7 @@ jobs:
           artifact-name: sbom-cocoindex.spdx.json
 
       - name: Grype scan cocoindex
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           image: 'cocoindex:latest'
           fail-build: true
@@ -267,7 +296,7 @@ jobs:
       - name: Bandit SAST scan
         run: |
           bandit -r docindex_server.py auth.py document_parsers.py document_chunker.py \
-            docindex_worker.py docindex_jobs.py docindex_constants.py -ll -ii
+            docindex_worker.py docindex_jobs.py docindex_constants.py docindex_url_fetch.py -ll -ii
 
       # Pygments 2.19.2: CVE-2026-4539 (ReDoS in AdlLexer) — no fixed PyPI release yet; transitive via docling stack.
       - name: pip-audit vulnerability check (CI merge lock)
@@ -285,12 +314,12 @@ jobs:
       - name: Ruff lint
         run: |
           ruff check docindex_server.py auth.py document_parsers.py document_chunker.py \
-            docindex_worker.py docindex_jobs.py docindex_constants.py
+            docindex_worker.py docindex_jobs.py docindex_constants.py docindex_url_fetch.py
 
       - name: Mypy type check
         run: |
           mypy docindex_server.py auth.py document_parsers.py document_chunker.py \
-            docindex_worker.py docindex_jobs.py docindex_constants.py --ignore-missing-imports
+            docindex_worker.py docindex_jobs.py docindex_constants.py docindex_url_fetch.py --ignore-missing-imports
 
       - name: Unit and integration tests
         run: pytest tests/ -v --cov=. --cov-report=xml -x
@@ -307,26 +336,26 @@ jobs:
         run: docker build -f Dockerfile.worker -t docindex-worker:latest infra/docindex-lancedb
 
       - name: SBOM (docindex API image)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: docindex:latest
           artifact-name: sbom-docindex-api.spdx.json
 
       - name: SBOM (docindex worker image)
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: docindex-worker:latest
           artifact-name: sbom-docindex-worker.spdx.json
 
       - name: Grype scan docindex API
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           image: 'docindex:latest'
           fail-build: true
           severity-cutoff: high
 
       - name: Grype scan docindex worker
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           image: 'docindex-worker:latest'
           fail-build: true

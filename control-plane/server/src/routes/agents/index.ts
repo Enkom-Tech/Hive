@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import path from "node:path";
 import type { Db } from "@hive/db";
 import { companies } from "@hive/db";
@@ -30,7 +30,7 @@ import {
 } from "../../services/index.js";
 import { getCurrentPrincipal } from "../../auth/principal.js";
 import { forbidden, unprocessable } from "../../errors.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "../authz.js";
+import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "../authz.js";
 import {
   assertAdapterTypeAllowed,
   findServerAdapter,
@@ -149,13 +149,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   const activitySvc = activityService(db);
   const costSvc = costService(db);
 
-  const commonDeps: AgentRoutesCommonDeps = { access, agentService: svc };
+  const commonDeps: AgentRoutesCommonDeps = { db, access, agentService: svc };
 
   async function assertCanManageInstructionsPath(
-    req: Parameters<typeof assertCompanyAccess>[0],
+    req: Request,
     targetAgent: { id: string; companyId: string },
   ) {
-    assertCompanyAccess(req, targetAgent.companyId);
+    await assertCompanyRead(db, req, targetAgent.companyId);
     const p = getCurrentPrincipal(req);
     if (p?.type === "user" || p?.type === "system") return;
     if (!p?.id || p?.type !== "agent") throw forbidden("Agent authentication required");
@@ -188,19 +188,16 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
 
   registerAgentListGetRoutes(router, {
     ...commonDeps,
-    db,
     heartbeatService: heartbeat,
     activityService: activitySvc,
     costService: costSvc,
-    assertBoard,
-    assertCompanyAccess,
     getActorInfo,
     logActivity: logActivityBound,
   });
 
   registerAgentKeysRoutes(router, {
+    db,
     agentService: svc,
-    assertBoard,
     getActorInfo,
     logActivity: logActivityBound,
   });
@@ -210,14 +207,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
     validate(openWorkerPairingWindowSchema),
     async (req, res, next) => {
       try {
-        assertBoard(req);
         const id = req.params.id as string;
         const agent = await svc.getById(id);
         if (!agent) {
           res.status(404).json({ error: "Agent not found" });
           return;
         }
-        assertCompanyAccess(req, agent.companyId);
+        await assertCompanyPermission(db, req, agent.companyId, "company:settings");
         const { ttlSeconds } = req.body as { ttlSeconds: number };
         const { expiresAt } = await pairingSvc.openPairingWindow(id, ttlSeconds);
         const actor = getActorInfo(req);
@@ -242,8 +238,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   router.get("/companies/:companyId/worker-pairing-requests", async (req, res, next) => {
     try {
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
-      assertBoard(req);
+      await assertCompanyRead(db, req, companyId);
       const requests = await pairingSvc.listPendingForCompany(companyId);
       res.json({ requests });
     } catch (err) {
@@ -253,7 +248,6 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
 
   router.post("/agents/:id/worker-pairing-requests/:requestId/approve", async (req, res, next) => {
     try {
-      assertBoard(req);
       const id = req.params.id as string;
       const requestId = req.params.requestId as string;
       const agent = await svc.getById(id);
@@ -261,7 +255,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
         res.status(404).json({ error: "Agent not found" });
         return;
       }
-      assertCompanyAccess(req, agent.companyId);
+      await assertCompanyPermission(db, req, agent.companyId, "company:settings");
       const actor = getActorInfo(req);
       await pairingSvc.approveRequest({
         companyId: agent.companyId,
@@ -288,7 +282,6 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
 
   router.post("/agents/:id/worker-pairing-requests/:requestId/reject", async (req, res, next) => {
     try {
-      assertBoard(req);
       const id = req.params.id as string;
       const requestId = req.params.requestId as string;
       const agent = await svc.getById(id);
@@ -296,7 +289,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
         res.status(404).json({ error: "Agent not found" });
         return;
       }
-      assertCompanyAccess(req, agent.companyId);
+      await assertCompanyPermission(db, req, agent.companyId, "company:settings");
       const actor = getActorInfo(req);
       await pairingSvc.rejectRequest({
         companyId: agent.companyId,
@@ -326,14 +319,12 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
     heartbeatService: heartbeat,
     agentService: svc,
     issueService: issueSvc,
-    assertBoard,
-    assertCompanyAccess,
     logActivity: logActivityBound,
   });
 
   router.get("/companies/:companyId/adapters/:type/models", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const type = req.params.type as string;
     const models = await listAdapterModels(type);
     res.json(models);
@@ -372,7 +363,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
 
   router.get("/companies/:companyId/adapters", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const adapters = listServerAdapters().map((a) => ({
       type: a.type,
       label: a.type.replace(/_/g, " "),
@@ -508,8 +499,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
 
   router.post("/companies/:companyId/agents", validate(createAgentSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
-    if (getCurrentPrincipal(req)?.type === "agent") assertBoard(req);
+    await assertCanCreateAgentsForCompany(req, companyId, commonDeps);
     assertAdapterTypeAllowed(req.body.adapterType);
     const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
       req.body.adapterType,
@@ -553,7 +543,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyRead(db, req, existing.companyId);
     const pConfig = getCurrentPrincipal(req);
     if (pConfig?.type === "agent") {
       const actorAgent = pConfig.id ? await svc.getById(pConfig.id) : null;
@@ -565,6 +555,8 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
         res.status(403).json({ error: "Only CEO can manage permissions" });
         return;
       }
+    } else if (pConfig?.type === "user") {
+      await assertCompanyPermission(db, req, existing.companyId, "users:manage_permissions");
     }
     const agent = await svc.updatePermissions(id, req.body);
     if (!agent) {
@@ -740,8 +732,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   });
 
   router.post("/agents/:id/pause", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
+    const existingPause = await svc.getById(id);
+    if (!existingPause) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertCompanyPermission(db, req, existingPause.companyId, "agents:create");
     const agent = await svc.pause(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -760,8 +757,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   });
 
   router.post("/agents/:id/resume", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
+    const existingResume = await svc.getById(id);
+    if (!existingResume) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertCompanyPermission(db, req, existingResume.companyId, "agents:create");
     const agent = await svc.resume(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -779,8 +781,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   });
 
   router.post("/agents/:id/terminate", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
+    const existingTerm = await svc.getById(id);
+    if (!existingTerm) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertCompanyPermission(db, req, existingTerm.companyId, "agents:create");
     const agent = await svc.terminate(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -799,8 +806,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   });
 
   router.delete("/agents/:id", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
+    const existingDel = await svc.getById(id);
+    if (!existingDel) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    await assertCompanyPermission(db, req, existingDel.companyId, "agents:create");
     const agent = await svc.remove(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -824,7 +836,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     const pWake = getCurrentPrincipal(req);
     if (pWake?.type === "agent" && pWake.id !== id) {
       res.status(403).json({ error: "Agent can only invoke itself" });
@@ -869,7 +881,7 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     const pWake = getCurrentPrincipal(req);
     if (pWake?.type === "agent" && pWake.id !== id) {
       res.status(403).json({ error: "Agent can only invoke itself" });
@@ -908,41 +920,38 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   });
 
   router.post("/agents/:id/claude-login", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
     const agent = await svc.getById(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     res.status(400).json({
       error: "Agent login is not supported for managed_worker adapter.",
     });
   });
 
   router.get("/agents/:id/runtime-state", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
     const agent = await svc.getById(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     const state = await heartbeat.getRuntimeState(id);
     res.json(state);
   });
 
   router.get("/agents/:id/task-sessions", async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
     const agent = await svc.getById(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     const sessions = await heartbeat.listTaskSessions(id);
     res.json(
       sessions.map((session) => ({
@@ -953,14 +962,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   });
 
   router.post("/agents/:id/runtime-state/reset-session", validate(resetAgentSessionSchema), async (req, res) => {
-    assertBoard(req);
     const id = req.params.id as string;
     const agent = await svc.getById(id);
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccess(req, agent.companyId);
+    await assertCompanyPermission(db, req, agent.companyId, "runs:board");
     const taskKey =
       typeof req.body.taskKey === "string" && req.body.taskKey.trim().length > 0
         ? req.body.taskKey.trim()

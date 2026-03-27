@@ -109,6 +109,8 @@ export interface Config {
    * When set, enables POST /api/internal/hive/inference-metering with Bearer auth for router-side ledger writes.
    */
   internalHiveOperatorSecret: string | undefined;
+  /** Enables POST /api/internal/plugin-host/rpc (Bearer) for OOP plugin workers. */
+  pluginHostSecret: string | undefined;
   /**
    * When set in local_trusted, exposes POST /api/e2e/mcp-smoke/materialize for MCP E2E smoke (non-production).
    */
@@ -123,6 +125,15 @@ export interface Config {
   trustedOriginsExtra: string[];
   /** Auth provider: builtin (Better Auth + board JWT + agent keys) or logto. */
   authProvider: AuthProvider;
+  /** Inbound GitHub webhooks for merge-driven workspace teardown (optional). */
+  vcsGitHubWebhookEnabled: boolean;
+  vcsGitHubWebhookSecret: string | undefined;
+  /** Optional comma-separated `owner/repo` allowlist for GitHub webhook processing. */
+  vcsGitHubAllowedRepos: string[] | undefined;
+  /**
+   * When a worker instance is marked draining, cancel queued/running runs still placed on that instance (default true).
+   */
+  drainCancelInFlightPlacementsEnabled: boolean;
 }
 
 /** Read from parsed env: HIVE_* key (pass suffix, e.g. "SECRETS_STRICT_MODE"). */
@@ -314,6 +325,13 @@ export function loadConfig(): Config {
     ? Math.max(0, workerAutomationReconcileIntervalMsRaw)
     : 300_000;
   const drainAutoEvacuateEnabled = parsed.HIVE_DRAIN_AUTO_EVACUATE_ENABLED === "true";
+  const drainCancelInFlightPlacementsEnabled = parsed.HIVE_DRAIN_CANCEL_IN_FLIGHT_PLACEMENTS_ENABLED !== "false";
+  const vcsGitHubWebhookEnabled = parsed.HIVE_VCS_GITHUB_WEBHOOK_ENABLED === "true";
+  const vcsGitHubWebhookSecret = e(parsed, "VCS_GITHUB_WEBHOOK_SECRET")?.trim() || undefined;
+  const vcsGitHubAllowedReposRaw = e(parsed, "VCS_GITHUB_ALLOWED_REPOS")?.trim();
+  const vcsGitHubAllowedRepos = vcsGitHubAllowedReposRaw
+    ? vcsGitHubAllowedReposRaw.split(",").map((s) => s.trim()).filter(Boolean)
+    : undefined;
   const workerDeliveryBusUrl = parsed.HIVE_WORKER_DELIVERY_BUS_URL?.trim() || undefined;
   const metricsEnabled = parsed.HIVE_METRICS_ENABLED === "true";
   const workerJwtSecret = e(parsed, "WORKER_JWT_SECRET")?.trim() || undefined;
@@ -321,6 +339,7 @@ export function loadConfig(): Config {
     e(parsed, "HIVE_INTERNAL_OPERATOR_SECRET")?.trim()
     || e(parsed, "INTERNAL_OPERATOR_SECRET")?.trim()
     || undefined;
+  const pluginHostSecret = e(parsed, "PLUGIN_HOST_SECRET")?.trim() || undefined;
   const e2eMcpSmokeMaterializeSecret = e(parsed, "E2E_MCP_MATERIALIZE_SECRET")?.trim() || undefined;
   const bifrostAdminBaseUrl = e(parsed, "BIFROST_ADMIN_BASE_URL")?.trim() || undefined;
   const bifrostAdminToken = e(parsed, "BIFROST_ADMIN_TOKEN")?.trim() || undefined;
@@ -390,10 +409,15 @@ export function loadConfig(): Config {
     workerIdentityAutomationEnabled,
     workerAutomationReconcileIntervalMs,
     drainAutoEvacuateEnabled,
+    drainCancelInFlightPlacementsEnabled,
+    vcsGitHubWebhookEnabled,
+    vcsGitHubWebhookSecret,
+    vcsGitHubAllowedRepos,
     workerDeliveryBusUrl,
     metricsEnabled,
     workerJwtSecret,
     internalHiveOperatorSecret,
+    pluginHostSecret,
     e2eMcpSmokeMaterializeSecret,
     bifrostAdminBaseUrl,
     bifrostAdminToken,

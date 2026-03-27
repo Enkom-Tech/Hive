@@ -16,6 +16,8 @@ export const createCostEventSchema = z
     outputTokens: z.number().int().nonnegative().optional().default(0),
     costCents: z.number().int().nonnegative(),
     occurredAt: z.string().datetime(),
+    /** When set, duplicate POSTs with the same key return the original row (gateway metering dedupe). */
+    idempotencyKey: z.string().min(1).max(256).optional().nullable(),
   })
   .refine(
     (d) =>

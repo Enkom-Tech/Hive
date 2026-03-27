@@ -3,6 +3,7 @@ import type { Request } from "express";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@hive/db";
+import { LOCAL_BOARD_USER_ID } from "../../board-claim.js";
 import type { Principal } from "@hive/shared";
 import type { DeploymentMode } from "@hive/shared";
 import { verifyLocalAgentJwt } from "../../agent-auth-jwt.js";
@@ -10,7 +11,6 @@ import { verifyBoardJwt } from "../board-jwt.js";
 import { verifyWorkerJwt } from "../worker-jwt.js";
 import type { BetterAuthSessionResult } from "../better-auth.js";
 import { logger } from "../../middleware/logger.js";
-import { LOCAL_BOARD_USER_ID } from "../../board-claim.js";
 import { accessService } from "../../services/access.js";
 
 function hashToken(token: string) {
@@ -30,9 +30,20 @@ export async function resolvePrincipalBuiltin(
   const runIdHeader = req.header("x-hive-run-id") ?? undefined;
 
   if (deps.deploymentMode === "local_trusted") {
+    const memberships = await deps.db
+      .select({ companyId: companyMemberships.companyId })
+      .from(companyMemberships)
+      .where(
+        and(
+          eq(companyMemberships.principalType, "user"),
+          eq(companyMemberships.principalId, LOCAL_BOARD_USER_ID),
+          eq(companyMemberships.status, "active"),
+        ),
+      );
     return {
-      type: "system",
-      id: "local-board",
+      type: "user",
+      id: LOCAL_BOARD_USER_ID,
+      company_ids: memberships.map((m) => m.companyId),
       roles: ["instance_admin"],
     };
   }

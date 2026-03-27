@@ -38,6 +38,7 @@
     "@google-cloud/secret-manager": "^6.1.1",
     "@hive/adapter-utils": "workspace:*",
     "@hive/db": "workspace:*",
+    "@hive/plugin-sdk": "workspace:*",
     "@hive/shared": "workspace:*",
     "better-auth": "^1.5.4",
     "cors": "^2.8.5",

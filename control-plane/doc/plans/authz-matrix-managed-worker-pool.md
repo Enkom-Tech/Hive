@@ -24,7 +24,7 @@ Related: [threat-model-managed-worker-pool.md](./threat-model-managed-worker-poo
 | `POST /api/companies/:companyId/agents/:agentId/worker-pool/rotate` | POST | Board | `assertCompanyAccess(companyId)` | Agent same company; `managed_worker`; `worker_placement_mode=automatic` | Cross-company ids; non-board actor | [`worker-pool-mobility-authz.test.ts`](../../server/src/__tests__/worker-pool-mobility-authz.test.ts) |
 | `PATCH /api/companies/:companyId/worker-instances/:workerInstanceId` | PATCH | Board | `assertCompanyAccess(companyId)` | `worker_instances.company_id = companyId` | Cross-company instance id; non-board actor | [`worker-pool-mobility-authz.test.ts`](../../server/src/__tests__/worker-pool-mobility-authz.test.ts) |
 | Instance enrollment consume | — | Drone | — | WebSocket upgrade verifies token → instance row | Replay consumed token → reject | `server/src/workers/worker-link.ts` |
-| Pool debug / admin read | — | — | — | *Not implemented* — no product route | — | N/A (use company-scoped drones/overview + logs) |
+| Pool debug / admin read | — | — | — | `GET /api/companies/:companyId/worker-link-debug` (board; in-memory per API replica) | — | N/A (use company-scoped drones/overview + logs) |
 
 ## WebSocket `/api/workers/link`
 

@@ -22,6 +22,9 @@ services:
     environment:
       # Defaults if not in .env.drone (must include colon for listen.go)
       HIVE_WORKER_HTTP_ADDR: ${HIVE_WORKER_HTTP_ADDR:-:8080}
+      # For production with HIVE_ADAPTER_*_CONTAINER + _IMAGE, set via .env.drone:
+      # HIVE_CONTAINER_IMAGE_ENFORCE=true
+      # HIVE_CONTAINER_IMAGE_ALLOWLIST=ghcr.io/your-org/
       # Persist lazy-downloaded adapter binaries on the hive-worker-cache volume
       HIVE_PROVISION_CACHE_DIR: /cache
     ports:

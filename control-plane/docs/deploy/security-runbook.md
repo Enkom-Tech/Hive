@@ -123,3 +123,5 @@ Rollback is a **release train**: deploy the **previous control-plane + worker** 
 4. **Verify:** Re-run smoke dispatch; watch for `placement_metric` / `429` on enrollment mint paths.
 
 Threat model and AuthZ: `doc/plans/threat-model-managed-worker-pool.md`, `doc/plans/authz-matrix-managed-worker-pool.md`.
+
+Infra program (flags, observability, doc cadence): [`docs/deploy/infra-program-conventions.md`](infra-program-conventions.md). Inbound VCS webhooks and worker workspace materialization: `doc/plans/threat-model-vcs-webhooks.md`, `doc/plans/threat-model-worker-workspace-materialization.md`.

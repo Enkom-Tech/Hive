@@ -1,6 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { and, desc, eq, isNull, or } from "drizzle-orm";
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
+import { z } from "zod";
 import { gatewayVirtualKeys, hiveDeployments, inferenceModels, type Db } from "@hive/db";
 import {
   companyPortabilityExportSchema,
@@ -14,6 +15,7 @@ import {
   patchWorkerIdentitySlotSchema,
   patchWorkerInstanceSchema,
   droneAutoDeployProfileQuerySchema,
+  isDigestPinnedImageRef,
   updateCompanySchema,
 } from "@hive/shared";
 import { getCurrentPrincipal } from "../auth/principal.js";
@@ -26,8 +28,12 @@ import {
   companyService,
   logActivity,
 } from "../services/index.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { forceDisconnectWorkerInstance } from "../workers/worker-link-registry.js";
+import { assertBoard, assertCompanyPermission, assertCompanyRead, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import {
+  debugWorkerLinkPoolForCompany,
+  forceDisconnectWorkerInstance,
+} from "../workers/worker-link-registry.js";
+import { sendDeployGrantToWorker } from "../workers/worker-link.js";
 import {
   parseWorkerProvisionManifest,
   resolveEffectiveWorkerRuntimeManifest,
@@ -36,6 +42,34 @@ import { sendSignedProvisionManifestJson } from "../services/worker-manifest-sig
 import { canReadCompanyWorkerRuntimeManifest } from "../services/worker-runtime-manifest-access.js";
 import { buildDroneAutoDeployProfile } from "../services/drone-auto-deploy-profile.js";
 import { bifrostCreateVirtualKey, type BifrostProviderConfigInput } from "../services/bifrost-admin.js";
+
+const mintDeployGrantSchema = z
+  .object({
+    agentId: z.string().uuid(),
+    imageRef: z.string().min(1).max(512),
+  })
+  .refine((d) => isDigestPinnedImageRef(d.imageRef), {
+    message:
+      "imageRef must be digest-pinned: reference must end with @sha256: followed by 64 hexadecimal characters",
+    path: ["imageRef"],
+  });
+
+function validateDeployGrantRequest(req: Request, res: Response, next: NextFunction) {
+  const r = mintDeployGrantSchema.safeParse(req.body);
+  if (!r.success) {
+    const digestIssue = r.error.issues.find(
+      (i) => i.path.length === 1 && i.path[0] === "imageRef" && i.code === "custom",
+    );
+    if (digestIssue) {
+      res.status(422).json({ error: digestIssue.message });
+      return;
+    }
+    res.status(400).json({ error: "Validation error", details: r.error.issues });
+    return;
+  }
+  req.body = r.data;
+  next();
+}
 
 async function listEffectiveChatModelsForRouter(
   db: Db,
@@ -71,6 +105,7 @@ export function companyRoutes(
   db: Db,
   routeOpts?: {
     drainAutoEvacuateEnabled?: boolean;
+    drainCancelInFlightPlacementsEnabled?: boolean;
     workerProvisionManifestJson?: string;
     workerProvisionManifestFile?: string;
     workerProvisionManifestSigningKeyPem?: string;
@@ -86,6 +121,7 @@ export function companyRoutes(
   const access = accessService(db);
   const agents = agentService(db, {
     drainAutoEvacuateEnabled: routeOpts?.drainAutoEvacuateEnabled,
+    drainCancelInFlightPlacementsEnabled: routeOpts?.drainCancelInFlightPlacementsEnabled,
     workerIdentityAutomationEnabled: routeOpts?.workerIdentityAutomationEnabled,
   });
 
@@ -162,9 +198,8 @@ export function companyRoutes(
   }
 
   router.get("/:companyId/worker-identity-slots", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const slots = await agents.listWorkerIdentitySlots(companyId);
     res.json({ slots });
   });
@@ -173,9 +208,8 @@ export function companyRoutes(
     "/:companyId/worker-identity-slots",
     validate(createWorkerIdentitySlotSchema),
     async (req, res) => {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "company:settings");
       const row = await agents.createWorkerIdentitySlot(companyId, req.body);
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -197,10 +231,9 @@ export function companyRoutes(
     "/:companyId/worker-identity-slots/:slotId",
     validate(patchWorkerIdentitySlotSchema),
     async (req, res) => {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
       const slotId = req.params.slotId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "company:settings");
       const row = await agents.patchWorkerIdentitySlot(companyId, slotId, req.body);
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -219,10 +252,9 @@ export function companyRoutes(
   );
 
   router.delete("/:companyId/worker-identity-slots/:slotId", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
     const slotId = req.params.slotId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     await agents.deleteWorkerIdentitySlot(companyId, slotId);
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -240,16 +272,14 @@ export function companyRoutes(
   });
 
   router.get("/:companyId/worker-identity-automation/status", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     res.json(await agents.getWorkerIdentityAutomationStatus(companyId));
   });
 
   router.get("/:companyId/drone-auto-deploy/profile", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const parsed = droneAutoDeployProfileQuerySchema.safeParse({
       target: typeof req.query.target === "string" ? req.query.target : "docker",
     });
@@ -282,9 +312,8 @@ export function companyRoutes(
   });
 
   router.get("/:companyId", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const company = await svc.getById(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -295,16 +324,16 @@ export function companyRoutes(
 
   router.post("/:companyId/export", validate(companyPortabilityExportSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     const result = await portability.exportBundle(companyId, req.body);
     res.json(result);
   });
 
   router.post("/import/preview", validate(companyPortabilityPreviewSchema), async (req, res) => {
     if (req.body.target.mode === "existing_company") {
-      assertCompanyAccess(req, req.body.target.companyId);
+      await assertCompanyRead(db, req, req.body.target.companyId);
     } else {
-      assertBoard(req);
+      assertInstanceAdmin(req);
     }
     const preview = await portability.previewImport(req.body);
     res.json(preview);
@@ -312,9 +341,9 @@ export function companyRoutes(
 
   router.post("/import", validate(companyPortabilityImportSchema), async (req, res) => {
     if (req.body.target.mode === "existing_company") {
-      assertCompanyAccess(req, req.body.target.companyId);
+      await assertCompanyPermission(db, req, req.body.target.companyId, "company:settings");
     } else {
-      assertBoard(req);
+      assertInstanceAdmin(req);
     }
     const actor = getActorInfo(req);
     const pImport = getCurrentPrincipal(req);
@@ -339,13 +368,10 @@ export function companyRoutes(
   });
 
   router.post("/", validate(createCompanySchema), async (req, res) => {
-    assertBoard(req);
+    assertInstanceAdmin(req);
     const p = getCurrentPrincipal(req);
-    if (!(p?.type === "system" || p?.roles?.includes("instance_admin"))) {
-      throw forbidden("Instance admin required");
-    }
     const company = await svc.create(req.body);
-    await access.ensureMembership(company.id, "user", p?.id ?? "local-board", "owner", "active");
+    await access.ensureMembership(company.id, "user", p?.id ?? "local-board", "admin", "active");
     await logActivity(db, {
       companyId: company.id,
       actorType: "user",
@@ -359,9 +385,8 @@ export function companyRoutes(
   });
 
   router.patch("/:companyId", validate(updateCompanySchema), async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     const wrm = (req.body as { workerRuntimeManifestJson?: string | null }).workerRuntimeManifestJson;
     if (wrm != null && wrm !== "") {
       try {
@@ -395,9 +420,8 @@ export function companyRoutes(
   });
 
   router.post("/:companyId/archive", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     const company = await svc.archive(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -416,9 +440,8 @@ export function companyRoutes(
   });
 
   router.delete("/:companyId", async (req, res) => {
-    assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     const company = await svc.remove(companyId);
     if (!company) {
       res.status(404).json({ error: "Company not found" });
@@ -434,7 +457,7 @@ export function companyRoutes(
       assertBoard(req);
       const companyId = req.params.companyId as string;
       const workerInstanceId = req.params.workerInstanceId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "company:settings");
       const { ttlSeconds } = req.body as { ttlSeconds: number };
       const { token, expiresAt } = await agents.createWorkerInstanceLinkEnrollmentToken(
         companyId,
@@ -463,7 +486,7 @@ export function companyRoutes(
     async (req, res) => {
       assertBoard(req);
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "company:settings");
       const { ttlSeconds } = req.body as { ttlSeconds: number };
       const { token, expiresAt } = await agents.createDroneProvisioningToken(companyId, ttlSeconds);
       const actor = getActorInfo(req);
@@ -489,7 +512,7 @@ export function companyRoutes(
       const companyId = req.params.companyId as string;
       const workerInstanceId = req.params.workerInstanceId as string;
       const agentId = req.params.agentId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "company:settings");
       await agents.bindManagedWorkerAgentToInstance(companyId, workerInstanceId, agentId);
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -512,7 +535,7 @@ export function companyRoutes(
     assertBoard(req);
     const companyId = req.params.companyId as string;
     const agentId = req.params.agentId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     const result = await agents.rotateAutomaticWorkerPoolPlacement(companyId, agentId);
     const actor = getActorInfo(req);
     if (result.rotated) {
@@ -538,7 +561,7 @@ export function companyRoutes(
     assertBoard(req);
     const companyId = req.params.companyId as string;
     const agentId = req.params.agentId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     await agents.unbindManagedWorkerAgentFromInstance(companyId, agentId);
     const actor = getActorInfo(req);
     await logActivity(db, {
@@ -562,7 +585,7 @@ export function companyRoutes(
       assertBoard(req);
       const companyId = req.params.companyId as string;
       const workerInstanceId = req.params.workerInstanceId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "company:settings");
       const result = await agents.patchWorkerInstance(companyId, workerInstanceId, req.body);
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -585,9 +608,8 @@ export function companyRoutes(
 
   router.get("/:companyId/inference-models", async (req, res, next) => {
     try {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyRead(db, req, companyId);
       const company = await svc.getById(companyId);
       if (!company) {
         res.status(404).json({ error: "Company not found" });
@@ -613,9 +635,8 @@ export function companyRoutes(
     validate(createInferenceModelSchema),
     async (req, res, next) => {
       try {
-        assertBoard(req);
         const companyId = req.params.companyId as string;
-        assertCompanyAccess(req, companyId);
+        await assertCompanyPermission(db, req, companyId, "company:settings");
         const company = await svc.getById(companyId);
         if (!company) {
           res.status(404).json({ error: "Company not found" });
@@ -643,9 +664,8 @@ export function companyRoutes(
 
   router.get("/:companyId/inference-router-config", async (req, res, next) => {
     try {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyRead(db, req, companyId);
       const company = await svc.getById(companyId);
       if (!company) {
         res.status(404).json({ error: "Company not found" });
@@ -692,14 +712,76 @@ export function companyRoutes(
     }
   });
 
+  router.get("/:companyId/worker-link-debug", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      await assertCompanyPermission(db, req, companyId, "company:settings");
+      res.json(debugWorkerLinkPoolForCompany(companyId));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post(
+    "/:companyId/deploy-grants",
+    validateDeployGrantRequest,
+    async (req, res, next) => {
+      try {
+        const companyId = req.params.companyId as string;
+        await assertCompanyPermission(db, req, companyId, "company:settings");
+        const deployOn =
+          process.env.HIVE_REQUEST_DEPLOY_ENABLED === "1" ||
+          process.env.HIVE_REQUEST_DEPLOY_ENABLED?.toLowerCase() === "true";
+        if (!deployOn) {
+          res.status(404).json({ error: "request_deploy is not enabled on this server" });
+          return;
+        }
+        const secret = process.env.HIVE_DEPLOY_GRANT_SECRET?.trim();
+        if (!secret) {
+          res.status(503).json({ error: "HIVE_DEPLOY_GRANT_SECRET is not configured" });
+          return;
+        }
+        const { agentId, imageRef } = req.body as z.infer<typeof mintDeployGrantSchema>;
+        const agentRow = await agents.getById(agentId);
+        if (!agentRow || agentRow.companyId !== companyId) {
+          res.status(404).json({ error: "Agent not found" });
+          return;
+        }
+        const expiresAt = Date.now() + 5 * 60_000;
+        const signature = createHmac("sha256", secret)
+          .update(`${companyId}|${imageRef}|${expiresAt}`)
+          .digest("hex");
+        const delivered = sendDeployGrantToWorker(agentId, {
+          type: "deploy_grant",
+          companyId,
+          imageRef,
+          expiresAt: String(expiresAt),
+          signature,
+        });
+        const actor = getActorInfo(req);
+        await logActivity(db, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          action: "worker.deploy_grant_minted",
+          entityType: "agent",
+          entityId: agentId,
+          details: { imageRef, delivered, expiresAt },
+        });
+        res.status(201).json({ ok: true, delivered, expiresAt, imageRef });
+      } catch (e) {
+        next(e);
+      }
+    },
+  );
+
   router.post(
     "/:companyId/gateway-virtual-keys",
     validate(createGatewayVirtualKeySchema),
     async (req, res, next) => {
       try {
-        assertBoard(req);
         const companyId = req.params.companyId as string;
-        assertCompanyAccess(req, companyId);
+        await assertCompanyPermission(db, req, companyId, "company:settings");
         const company = await svc.getById(companyId);
         if (!company) {
           res.status(404).json({ error: "Company not found" });
@@ -802,9 +884,8 @@ export function companyRoutes(
 
   router.get("/:companyId/gateway-virtual-keys", async (req, res, next) => {
     try {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyRead(db, req, companyId);
       const rows = await db
         .select({
           id: gatewayVirtualKeys.id,
@@ -826,10 +907,9 @@ export function companyRoutes(
 
   router.delete("/:companyId/gateway-virtual-keys/:keyId", async (req, res, next) => {
     try {
-      assertBoard(req);
       const companyId = req.params.companyId as string;
       const keyId = req.params.keyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "company:settings");
       const updated = await db
         .update(gatewayVirtualKeys)
         .set({ revokedAt: new Date() })
@@ -856,7 +936,7 @@ export function companyRoutes(
     assertBoard(req);
     const companyId = req.params.companyId as string;
     const workerInstanceId = req.params.workerInstanceId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "company:settings");
     forceDisconnectWorkerInstance(workerInstanceId);
     await agents.deleteWorkerInstance(companyId, workerInstanceId);
     const actor = getActorInfo(req);

@@ -11,7 +11,7 @@ import {
   type AgentRoutesCommonDeps,
 } from "./common.js";
 import { getCurrentPrincipal } from "../../auth/principal.js";
-import { assertBoard, assertCompanyAccess, getActorInfo } from "../authz.js";
+import { assertBoard, assertCompanyRead, getActorInfo } from "../authz.js";
 import { redactEventPayload } from "../../redaction.js";
 import type { LogActivityInput } from "../../services/activity-log.js";
 import { isAgentWorkerConnected } from "../../workers/worker-link.js";
@@ -117,12 +117,9 @@ function toLeanOrgNode(node: Record<string, unknown>): Record<string, unknown> {
 }
 
 export type AgentListGetDeps = AgentRoutesCommonDeps & {
-  db: Db;
   heartbeatService: HeartbeatService;
   activityService: ActivityService;
   costService: CostService;
-  assertBoard: typeof assertBoard;
-  assertCompanyAccess: typeof assertCompanyAccess;
   getActorInfo: typeof getActorInfo;
   logActivity: (input: LogActivityInput) => Promise<void>;
 };
@@ -162,16 +159,14 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
     heartbeatService: heartbeat,
     activityService: activitySvc,
     costService: costs,
-    assertBoard: assertBoardFn,
-    assertCompanyAccess: assertCompanyAccessFn,
     getActorInfo: getActorInfoFn,
     logActivity: logActivityFn,
   } = deps;
-  const commonDeps = { access, agentService: svc };
+  const commonDeps = { db, access, agentService: svc };
 
   router.get("/companies/:companyId/agents", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccessFn(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const result = await svc.list(companyId);
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId, commonDeps);
     const p = getCurrentPrincipal(req);
@@ -184,13 +179,13 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
 
   router.get("/companies/:companyId/drones/overview", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccessFn(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const overview = await svc.listDroneBoardAgentOverview(companyId);
     res.json(overview);
   });
 
   router.get("/instance/scheduler-heartbeats", async (req, res) => {
-    assertBoardFn(req);
+    assertBoard(req);
     const pSched = getCurrentPrincipal(req);
     const accessConditions = [];
     if (pSched?.type !== "system" && !pSched?.roles?.includes("instance_admin")) {
@@ -262,7 +257,7 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
 
   router.get("/companies/:companyId/org", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccessFn(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const tree = await svc.orgForCompany(companyId);
     const leanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
     res.json(leanTree);
@@ -317,7 +312,7 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccessFn(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
 
     if (pAttr?.type === "agent" && pAttr.id !== agentId) {
       res.status(403).json({ error: "Agent can only view own attribution" });
@@ -330,7 +325,7 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
       heartbeat.list(agent.companyId, agentId, runsLimit),
     ]);
 
-    const agentRow = byAgentRows.find((r: { agentId: string; costCents?: number }) => r.agentId === agentId);
+    const agentRow = byAgentRows.find((r) => r.agentId != null && r.agentId === agentId);
     const spendCents = agentRow?.costCents ?? 0;
     const budgetCents = agent.budgetMonthlyCents ?? 0;
     const utilizationPercent =
@@ -370,7 +365,7 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccessFn(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     const pGet = getCurrentPrincipal(req);
     if (pGet?.type === "agent" && pGet.id !== id) {
       const canRead = await actorCanReadConfigurationsForCompany(req, agent.companyId, commonDeps);
@@ -391,7 +386,7 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
       res.status(404).json({ error: "Agent not found" });
       return;
     }
-    assertCompanyAccessFn(req, agent.companyId);
+    await assertCompanyRead(db, req, agent.companyId);
     const pConn = getCurrentPrincipal(req);
     if (pConn?.type === "agent" && pConn.id !== id) {
       const canRead = await actorCanReadConfigurationsForCompany(req, agent.companyId, commonDeps);

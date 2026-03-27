@@ -14,7 +14,7 @@ import type {
   CompanyPortabilityPreviewAgentPlan,
   CompanyPortabilityPreviewResult,
 } from "@hive/shared";
-import { normalizeAgentUrlKey, portabilityManifestSchema } from "@hive/shared";
+import { DEFAULT_HIVE_DEPLOYMENT_ID, normalizeAgentUrlKey, portabilityManifestSchema } from "@hive/shared";
 import { notFound, unprocessable } from "../errors.js";
 import { accessService } from "./access.js";
 import { agentService } from "./agents.js";
@@ -833,6 +833,7 @@ export function companyPortabilityService(db: Db) {
         sourceManifest.source?.companyName ??
         "Imported Company";
       const created = await companies.create({
+        deploymentId: DEFAULT_HIVE_DEPLOYMENT_ID,
         name: companyName,
         description: include.company ? (sourceManifest.company?.description ?? null) : null,
         productionPolicies: include.company ? (sourceManifest.company?.productionPolicies ?? null) : null,
@@ -841,7 +842,7 @@ export function companyPortabilityService(db: Db) {
           ? (sourceManifest.company?.requireBoardApprovalForNewAgents ?? true)
           : true,
       });
-      await access.ensureMembership(created.id, "user", actorUserId ?? "board", "owner", "active");
+      await access.ensureMembership(created.id, "user", actorUserId ?? "board", "admin", "active");
       targetCompany = created;
       companyAction = "created";
     } else {

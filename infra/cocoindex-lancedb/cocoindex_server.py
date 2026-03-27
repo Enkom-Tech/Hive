@@ -6,8 +6,9 @@ Local Git repository indexing with llama.cpp embeddings.
 
 import asyncio
 import hashlib
-import json
+import ast
 import os
+import json
 import time
 import re
 import threading
@@ -185,9 +186,11 @@ class IndexResponse(BaseModel):
     duration_ms: float
 
 # -----------------------------------------------------------------------------
-# Tree-sitter chunking
+# Grammar-aware and line-based chunking (v1: optional Python ast for .py;
+# multi-language tree-sitter is not wired here yet).
 # -----------------------------------------------------------------------------
 class CodeChunker:
+    """Splits source into chunks: optional Python AST top-level blocks, else line windows."""
     SUPPORTED_LANGUAGES = {
         ".py": "python",
         ".js": "javascript",
@@ -202,7 +205,40 @@ class CodeChunker:
     CHUNK_OVERLAP = 64
 
     def __init__(self):
-        pass  # TODO: implement AST-based chunking with tree-sitter (currently uses line-based fallback)
+        pass
+
+    def _chunk_python_ast(self, file_path: str, content: str, repo_name: str, file_hash: str, language: str) -> Optional[List[CodeChunk]]:
+        """Split .py files on top-level class/def blocks when COCOINDEX_AST_CHUNK_PY=1."""
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return None
+        lines = content.split("\n")
+        chunks: List[CodeChunk] = []
+        chunk_num = 0
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            end_ln = getattr(node, "end_lineno", None) or node.lineno
+            start = max(0, node.lineno - 1)
+            end = min(len(lines), end_ln)
+            chunk_content = "\n".join(lines[start:end])
+            if not chunk_content.strip():
+                continue
+            chunks.append(
+                CodeChunk(
+                    id=f"{file_path}:ast:{chunk_num}",
+                    file_path=file_path,
+                    content=chunk_content,
+                    language=language,
+                    chunk_start=start,
+                    chunk_end=end,
+                    file_hash=file_hash,
+                    repo_name=repo_name,
+                )
+            )
+            chunk_num += 1
+        return chunks or None
 
     def get_language(self, file_path: str) -> Optional[str]:
         ext = Path(file_path).suffix.lower()
@@ -211,7 +247,13 @@ class CodeChunker:
     def chunk_file(self, file_path: str, content: str, repo_name: str) -> List[CodeChunk]:
         language = self.get_language(file_path) or "text"
         file_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-        
+
+        flag = os.environ.get("COCOINDEX_AST_CHUNK_PY", "").strip().lower()
+        if flag in ("1", "true", "yes") and file_path.lower().endswith(".py"):
+            ast_chunks = self._chunk_python_ast(file_path, content, repo_name, file_hash, language)
+            if ast_chunks:
+                return ast_chunks
+
         chunks = []
         lines = content.split('\n')
         

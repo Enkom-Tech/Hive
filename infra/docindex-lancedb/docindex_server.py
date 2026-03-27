@@ -246,6 +246,8 @@ class IndexRequest(BaseModel):
     force_reindex: bool = False
     source_id: Optional[str] = None
     acl_scope: Optional[str] = None
+    # When set, fetches URLs into docs_path/.fetched/ before indexing (allowlist + SSRF guards).
+    fetch_urls: Optional[List[str]] = None
 
 
 class IndexResponse(BaseModel):
@@ -906,6 +908,20 @@ class DocIndexer:
         _safe_str_filter("acl_scope", acl_scope)
 
         force = request.force_reindex
+
+        if request.fetch_urls:
+            from docindex_url_fetch import fetch_url_to_dir
+
+            sub = docs_root / ".fetched"
+            for u in request.fetch_urls:
+                if not u or not str(u).strip():
+                    continue
+                try:
+                    await asyncio.to_thread(fetch_url_to_dir, str(u).strip(), sub)
+                except Exception as e:
+                    stats["errors"] += 1
+                    logger.warning("fetch_url_failed", url=u, err=str(e))
+
         if settings.use_worker_queue:
             existing = {} if force else await self.db.get_existing_file_byte_hashes(source_id)
         else:

@@ -38,6 +38,12 @@ import {
   WORKER_API_IDEMPOTENCY_ROUTES,
   workerApiIdempotencyAdvisoryKeys,
 } from "./worker-api-idempotency.js";
+import {
+  adaptReplayedWorkerApiBody,
+  buildWorkerApiSuccessResponse,
+  workerApiSuccessJsonBody,
+} from "./worker-api-payload.js";
+import { listPluginToolCatalogForCompany } from "../services/plugin-tools.js";
 
 export const WORKER_API_ACTIONS = {
   costReport: "worker_api.cost_report",
@@ -90,6 +96,10 @@ const issueAppendBodySchema = z.object({
 });
 
 const issueStatuses = ISSUE_STATUSES as readonly string[];
+
+const pluginToolsQuerySchema = z.object({
+  agentId: z.string().uuid(),
+});
 
 const issueTransitionBodySchema = z.object({
   agentId: z.string().uuid(),
@@ -253,7 +263,7 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
             return { issue: created, intentResult: intentRes };
           });
           await emitWorkerIssueCreateSideEffects(issue, intentResult);
-          res.status(201).json({ ok: true, result: { issue } });
+          res.status(201).json(buildWorkerApiSuccessResponse(req, { issue }));
           return;
         }
 
@@ -302,7 +312,7 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
             entityId: created.id,
             linkType: intentRes.folded ? "duplicate" : "primary",
           });
-          const responseBody = JSON.parse(JSON.stringify({ ok: true, result: { issue: created } })) as Record<
+          const responseBody = JSON.parse(JSON.stringify(workerApiSuccessJsonBody({ issue: created }))) as Record<
             string,
             unknown
           >;
@@ -323,12 +333,12 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
         });
 
         if (txResult.kind === "replay") {
-          res.status(txResult.httpStatus).json(txResult.body);
+          res.status(txResult.httpStatus).json(adaptReplayedWorkerApiBody(req, txResult.body));
           return;
         }
 
         await emitWorkerIssueCreateSideEffects(txResult.issue, txResult.intentResult);
-        res.status(201).json(txResult.body);
+        res.status(201).json(buildWorkerApiSuccessResponse(req, (txResult.body as { result: unknown }).result));
       } catch (err) {
         next(err);
       }
@@ -459,7 +469,7 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
             .catch((err) => logger.warn({ err, issueId: issue.id }, "wakeup on worker issue update failed"));
         }
 
-        res.status(200).json({ ok: true, result: { issue } });
+        res.status(200).json(buildWorkerApiSuccessResponse(req, { issue }));
       } catch (err) {
         next(err);
       }
@@ -484,7 +494,7 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
           body,
         });
 
-        res.status(201).json({ ok: true, result: { agent, approval } });
+        res.status(201).json(buildWorkerApiSuccessResponse(req, { agent, approval }));
       } catch (err) {
         next(err);
       }
@@ -519,7 +529,7 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
           details: { workerApi: true },
         });
 
-        res.status(201).json({ ok: true, result: { costEventId: event.id } });
+        res.status(201).json(buildWorkerApiSuccessResponse(req, { costEventId: event.id }));
       } catch (err) {
         next(err);
       }
@@ -568,7 +578,7 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
           entityId: comment.id,
           details: { workerApi: true, issueId: issue.id },
         });
-        res.status(200).json({ ok: true, result: { commentId: comment.id, issueId: issue.id } });
+        res.status(200).json(buildWorkerApiSuccessResponse(req, { commentId: comment.id, issueId: issue.id }));
       } catch (err) {
         next(err);
       }
@@ -629,15 +639,31 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
             toStatus: nextStatus,
           },
         });
-        res.status(200).json({
-          ok: true,
-          result: { issueId: updated.id, status: updated.status },
-        });
+        res.status(200).json(
+          buildWorkerApiSuccessResponse(req, { issueId: updated.id, status: updated.status }),
+        );
       } catch (err) {
         next(err);
       }
     },
   );
+
+  router.get("/plugin-tools", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { companyId } = assertWorkerInstance(req);
+      const parsedQ = pluginToolsQuerySchema.safeParse(req.query);
+      if (!parsedQ.success) {
+        res.status(400).json({ error: "Invalid query", details: parsedQ.error.flatten() });
+        return;
+      }
+      const { agentId } = parsedQ.data;
+      await requireAgentInCompany(db, agentId, companyId);
+      const tools = await listPluginToolCatalogForCompany(db, companyId);
+      res.status(200).json(buildWorkerApiSuccessResponse(req, { tools }));
+    } catch (err) {
+      next(err);
+    }
+  });
 
   router.get("/issues/:issueId", async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -672,17 +698,15 @@ export function workerApiRoutes(db: Db, opts: { secretsStrictMode: boolean }): R
         entityId: issue.id,
         details: { workerApi: true },
       });
-      res.status(200).json({
-        ok: true,
-        result: {
-          issueId: issue.id,
-          identifier: issue.identifier,
-          title: issue.title,
-          status: issue.status,
-          assigneeAgentId: issue.assigneeAgentId ?? null,
-          projectId: issue.projectId ?? null,
-        },
-      });
+      const result = {
+        issueId: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        status: issue.status,
+        assigneeAgentId: issue.assigneeAgentId ?? null,
+        projectId: issue.projectId ?? null,
+      };
+      res.status(200).json(buildWorkerApiSuccessResponse(req, result));
     } catch (err) {
       next(err);
     }

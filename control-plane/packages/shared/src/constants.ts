@@ -354,14 +354,29 @@ export type JoinRequestStatus = (typeof JOIN_REQUEST_STATUSES)[number];
 export const AUTH_PROVIDERS = ["builtin", "logto"] as const;
 export type AuthProvider = (typeof AUTH_PROVIDERS)[number];
 
+/** Human company membership roles (see doc/plans/rbac-route-matrix.md). */
+export const COMPANY_MEMBERSHIP_ROLES = ["viewer", "operator", "admin"] as const;
+
 export const PERMISSION_KEYS = [
+  "activity:write",
   "agents:create",
-  "users:invite",
-  "users:manage_permissions",
-  "departments:manage",
+  "approvals:act",
+  "company:read",
+  "company:settings",
+  "costs:manage",
+  "costs:read",
   "departments:assign_members",
+  "departments:manage",
+  "goals:write",
+  "issues:write",
+  "joins:approve",
+  "plugins:manage",
+  "projects:write",
+  "runs:board",
+  "secrets:manage",
   "tasks:assign",
   "tasks:assign_scope",
-  "joins:approve",
+  "users:invite",
+  "users:manage_permissions",
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];

@@ -25,6 +25,8 @@ export const costEvents = pgTable(
     costCents: integer("cost_cents").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Dedupes gateway/Bifrost metering replays (partial unique index in SQL migration). */
+    gatewayMeteringKey: text("gateway_metering_key"),
   },
   (table) => ({
     companyOccurredIdx: index("cost_events_company_occurred_idx").on(table.companyId, table.occurredAt),

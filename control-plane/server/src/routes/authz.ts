@@ -1,6 +1,15 @@
 import type { Request } from "express";
+import type { Db } from "@hive/db";
+import type { PermissionKey } from "@hive/shared";
+import { getCurrentPrincipal, isLocalImplicit } from "../auth/principal.js";
 import { forbidden, unauthorized } from "../errors.js";
-import { getCurrentPrincipal } from "../auth/principal.js";
+import { accessService } from "../services/access.js";
+
+/** When true, local_trusted `local-board` user must pass normal grant checks (integration / CI RBAC tests). */
+function rbacEnforceForLocalImplicitBoard(): boolean {
+  const v = process.env.HIVE_RBAC_ENFORCE_FOR_LOCAL_BOARD?.trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
 
 export function assertBoard(req: Request) {
   const p = getCurrentPrincipal(req);
@@ -20,6 +29,47 @@ export function assertInstanceAdmin(req: Request) {
     return;
   }
   throw forbidden("Instance admin required");
+}
+
+/**
+ * Company scope + permission check for board HTTP APIs.
+ * Local implicit board and system principal bypass grant evaluation.
+ */
+export async function assertCompanyPermission(
+  db: Db,
+  req: Request,
+  companyId: string,
+  permissionKey: PermissionKey,
+): Promise<void> {
+  assertCompanyAccess(req, companyId);
+  const p = getCurrentPrincipal(req);
+  if (p?.type === "worker_instance") {
+    throw forbidden("Worker instance cannot use board permission checks");
+  }
+  if (p?.type === "system") {
+    return;
+  }
+  if (isLocalImplicit(req) && !rbacEnforceForLocalImplicitBoard()) {
+    return;
+  }
+  const access = accessService(db);
+  if (p?.type === "agent") {
+    if (!p.id) throw forbidden();
+    const allowed = await access.hasPermission(companyId, "agent", p.id, permissionKey);
+    if (!allowed) throw forbidden("Permission denied");
+    return;
+  }
+  if (p?.type === "user") {
+    if (p.roles.includes("instance_admin")) return;
+    const allowed = await access.canUser(companyId, p.id, permissionKey);
+    if (!allowed) throw forbidden("Permission denied");
+    return;
+  }
+  throw forbidden("Permission denied");
+}
+
+export async function assertCompanyRead(db: Db, req: Request, companyId: string): Promise<void> {
+  await assertCompanyPermission(db, req, companyId, "company:read");
 }
 
 export function assertCompanyAccess(req: Request, companyId: string) {

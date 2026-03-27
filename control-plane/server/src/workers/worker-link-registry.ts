@@ -118,3 +118,23 @@ export async function syncWorkerInstanceBindings(db: Db, workerInstanceRowId: st
     agentToInstance.set(aid, workerInstanceRowId);
   }
 }
+
+/** Board-only debug snapshot of in-memory worker link registry for one company (per-process). */
+export function debugWorkerLinkPoolForCompany(companyId: string) {
+  const instances: {
+    workerInstanceRowId: string;
+    agentIds: string[];
+    stableInstanceId?: string;
+    linkMode: WorkerConnection["linkMode"];
+  }[] = [];
+  for (const [id, c] of registryByInstance) {
+    if (c.companyId !== companyId) continue;
+    instances.push({
+      workerInstanceRowId: id,
+      agentIds: [...c.agentIds],
+      stableInstanceId: c.stableInstanceId,
+      linkMode: c.linkMode,
+    });
+  }
+  return { workerInstanceConnections: instances.length, instances };
+}

@@ -3,6 +3,8 @@ import type { Db } from "@hive/db";
 import { agents, approvals, heartbeatRuns } from "@hive/db";
 import type { SidebarBadges } from "@hive/shared";
 
+type SidebarBadgeCounts = Omit<SidebarBadges, "canApproveJoinRequests">;
+
 const ACTIONABLE_APPROVAL_STATUSES = ["pending", "revision_requested"];
 const FAILED_HEARTBEAT_STATUSES = ["failed", "timed_out"];
 
@@ -11,7 +13,7 @@ export function sidebarBadgeService(db: Db) {
     get: async (
       companyId: string,
       extra?: { joinRequests?: number; unreadTouchedIssues?: number },
-    ): Promise<SidebarBadges> => {
+    ): Promise<SidebarBadgeCounts> => {
       const actionableApprovals = await db
         .select({ count: sql<number>`count(*)` })
         .from(approvals)

@@ -10,7 +10,7 @@ import { getCurrentPrincipal } from "../auth/principal.js";
 import { forbidden, unauthorized, unprocessable } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { accessService, agentService, departmentService, logActivity } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertCompanyRead, getActorInfo } from "./authz.js";
 
 export function departmentRoutes(db: Db) {
   const router = Router();
@@ -19,7 +19,7 @@ export function departmentRoutes(db: Db) {
   const agentsSvc = agentService(db);
 
   async function assertCanManageDepartments(req: Request, companyId: string) {
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const p = getCurrentPrincipal(req);
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) return;
     if (p?.type === "user") {
@@ -39,7 +39,7 @@ export function departmentRoutes(db: Db) {
   }
 
   async function assertCanAssignMembers(req: Request, companyId: string) {
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const p = getCurrentPrincipal(req);
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) return;
     if (p?.type === "user") {
@@ -74,7 +74,7 @@ export function departmentRoutes(db: Db) {
 
   router.get("/companies/:companyId/departments", async (req, res) => {
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyRead(db, req, companyId);
     const rows = await departmentsSvc.list(companyId);
     res.json(rows);
   });
@@ -141,7 +141,7 @@ export function departmentRoutes(db: Db) {
   router.get("/companies/:companyId/departments/:departmentId/memberships", async (req, res) => {
       const companyId = req.params.companyId as string;
       const departmentId = req.params.departmentId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyRead(db, req, companyId);
       const parsed = listDepartmentMembershipsQuerySchema.safeParse(req.query);
       if (!parsed.success) {
         res.status(400).json({ error: "Invalid query", details: parsed.error.issues });

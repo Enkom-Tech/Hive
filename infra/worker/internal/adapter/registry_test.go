@@ -84,6 +84,26 @@ func TestRegistry_Executor_ContainerWhenEnvSet(t *testing.T) {
 	}
 }
 
+func TestRegistry_Executor_AutosandboxDefaultUsesImageWithoutContainerFlag(t *testing.T) {
+	os.Setenv("HIVE_ADAPTER_ct_CMD", "claude")
+	os.Setenv("HIVE_ADAPTER_ct_IMAGE", "hive-agent:sandbox")
+	os.Setenv("HIVE_AUTOSANDBOX_DEFAULT", "true")
+	defer func() {
+		os.Unsetenv("HIVE_ADAPTER_ct_CMD")
+		os.Unsetenv("HIVE_ADAPTER_ct_IMAGE")
+		os.Unsetenv("HIVE_AUTOSANDBOX_DEFAULT")
+	}()
+	r := NewRegistryFromEnv()
+	ex := r.Executor("ct")
+	ce, ok := ex.(*executor.ContainerExecutor)
+	if !ok {
+		t.Fatalf("expected *ContainerExecutor, got %T", ex)
+	}
+	if ce.Image != "hive-agent:sandbox" {
+		t.Errorf("Image=%q", ce.Image)
+	}
+}
+
 func TestRegistry_Executor_AcpxWhenCmdAndAgentSet(t *testing.T) {
 	os.Setenv("HIVE_ADAPTER_codex_acp_CMD", "acpx")
 	os.Setenv("HIVE_ADAPTER_codex_acp_AGENT", "codex")

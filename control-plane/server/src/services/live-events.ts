@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { LiveEvent, LiveEventType } from "@hive/shared";
+import { forwardLiveEventToPluginBridge } from "./plugin-domain-events.js";
 
 type LiveEventPayload = Record<string, unknown>;
 type LiveEventListener = (event: LiveEvent) => void;
@@ -31,6 +32,7 @@ export function publishLiveEvent(input: {
 }) {
   const event = toLiveEvent(input);
   emitter.emit(input.companyId, event);
+  forwardLiveEventToPluginBridge(event);
   return event;
 }
 

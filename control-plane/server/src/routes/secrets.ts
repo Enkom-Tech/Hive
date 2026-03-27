@@ -10,7 +10,7 @@ import {
 } from "@hive/shared";
 import { validate } from "../middleware/validate.js";
 import { getCurrentPrincipal } from "../auth/principal.js";
-import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { assertBoard, assertCompanyPermission } from "./authz.js";
 import { logActivity, secretProviderMigrationService, secretService } from "../services/index.js";
 
 export function secretRoutes(db: Db, defaultProvider: SecretProvider) {
@@ -19,17 +19,17 @@ export function secretRoutes(db: Db, defaultProvider: SecretProvider) {
   const migrationSvc = secretProviderMigrationService(db);
   const provider = SECRET_PROVIDERS.includes(defaultProvider) ? defaultProvider : "local_encrypted";
 
-  router.get("/companies/:companyId/secret-providers", (req, res) => {
+  router.get("/companies/:companyId/secret-providers", async (req, res) => {
     assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "secrets:manage");
     res.json(svc.listProviders());
   });
 
   router.get("/companies/:companyId/secrets", async (req, res) => {
     assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "secrets:manage");
     const secrets = await svc.list(companyId);
     res.json(secrets);
   });
@@ -37,7 +37,7 @@ export function secretRoutes(db: Db, defaultProvider: SecretProvider) {
   router.post("/companies/:companyId/secrets", validate(createSecretSchema), async (req, res) => {
     assertBoard(req);
     const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
+    await assertCompanyPermission(db, req, companyId, "secrets:manage");
 
     const created = await svc.create(
       companyId,
@@ -72,7 +72,7 @@ export function secretRoutes(db: Db, defaultProvider: SecretProvider) {
       res.status(404).json({ error: "Secret not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "secrets:manage");
 
     const rotated = await svc.rotate(
       id,
@@ -104,7 +104,7 @@ export function secretRoutes(db: Db, defaultProvider: SecretProvider) {
       res.status(404).json({ error: "Secret not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "secrets:manage");
 
     const updated = await svc.update(id, {
       name: req.body.name,
@@ -138,7 +138,7 @@ export function secretRoutes(db: Db, defaultProvider: SecretProvider) {
       res.status(404).json({ error: "Secret not found" });
       return;
     }
-    assertCompanyAccess(req, existing.companyId);
+    await assertCompanyPermission(db, req, existing.companyId, "secrets:manage");
 
     const removed = await svc.remove(id);
     if (!removed) {
@@ -165,7 +165,7 @@ export function secretRoutes(db: Db, defaultProvider: SecretProvider) {
     async (req, res) => {
       assertBoard(req);
       const companyId = req.params.companyId as string;
-      assertCompanyAccess(req, companyId);
+      await assertCompanyPermission(db, req, companyId, "secrets:manage");
       const actorId = getCurrentPrincipal(req)?.id ?? "board";
       const payload = {
         companyId,

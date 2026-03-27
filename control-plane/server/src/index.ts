@@ -230,7 +230,7 @@ export async function startServer(): Promise<StartedServer> {
         principalType: "user",
         principalId: LOCAL_BOARD_USER_ID,
         status: "active",
-        membershipRole: "owner",
+        membershipRole: "admin",
       });
     }
   }
@@ -519,12 +519,17 @@ export async function startServer(): Promise<StartedServer> {
     rateLimitMax: config.rateLimitMax,
     metricsEnabled: config.metricsEnabled,
     drainAutoEvacuateEnabled: config.drainAutoEvacuateEnabled,
+    drainCancelInFlightPlacementsEnabled: config.drainCancelInFlightPlacementsEnabled,
+    vcsGitHubWebhookEnabled: config.vcsGitHubWebhookEnabled,
+    vcsGitHubWebhookSecret: config.vcsGitHubWebhookSecret,
+    vcsGitHubAllowedRepos: config.vcsGitHubAllowedRepos,
     workerIdentityAutomationEnabled: config.workerIdentityAutomationEnabled,
     apiPublicBaseUrl: config.authPublicBaseUrl,
     workerProvisionManifestJson: config.workerProvisionManifestJson,
     workerProvisionManifestFile: config.workerProvisionManifestFile,
     workerProvisionManifestSigningKeyPem: config.workerProvisionManifestSigningKeyPem,
     internalHiveOperatorSecret: config.internalHiveOperatorSecret,
+    pluginHostSecret: config.pluginHostSecret,
     e2eMcpSmokeMaterializeSecret: config.e2eMcpSmokeMaterializeSecret,
     bifrostAdminBaseUrl: config.bifrostAdminBaseUrl,
     bifrostAdminToken: config.bifrostAdminToken,

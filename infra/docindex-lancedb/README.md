@@ -107,7 +107,7 @@ For the MCP gateway image, build [`../cocoindex-lancedb/Dockerfile.gateway`](../
 ## Limitations (v1)
 
 - Scanned PDFs / OCR quality depends on Docling configuration.
-- Web scraping is not implemented; mount files or sync into `DOCINDEX_DOCS_PATH`.
+- Optional URL ingest: set **`DOCINDEX_SCRAPE_ALLOWED_HOSTS`** (comma-separated hostnames), then pass **`fetch_urls`** on `POST /index`. **`DOCINDEX_SCRAPE_MAX_BYTES`**, **`DOCINDEX_SCRAPE_TIMEOUT_SEC`**, and **`DOCINDEX_SCRAPE_ALLOW_PRIVATE_IPS`** tune behavior (private IPs blocked by default). See [`docindex_url_fetch.py`](docindex_url_fetch.py).
 - `source_id` / `acl_scope` filters use strict safe-string patterns; complex ACL belongs in a later phase.
 
 ## License

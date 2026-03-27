@@ -24,7 +24,7 @@ The UI entrypoints are enabled (`SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI = true` in 
 
 ## Teardown and cleanup
 
-Teardown and worktree removal are not implemented. The `teardownCommand` field is parsed and stored in project execution workspace policy for future use but is never invoked. Cleanup is manual: operators remove worktrees (e.g. `git worktree remove`) or run their own teardown script when done. Full cleanup policies (e.g. on issue done or merge) are planned as a follow-up (see doc/plans/workspace-strategy-and-git-worktrees.md Phase 8).
+When the project `execution_workspace_policy.cleanupPolicy.mode` is **`on_done`**, the control plane runs `teardownCommand` (if set) and `git worktree remove --force` after an issue moves to **`done`** or **`cancelled`** (see `teardownIssueExecutionWorkspaceOnTerminal` in `server/src/services/workspace-runtime.ts`). Otherwise cleanup remains manual. Merge-driven cleanup is still future work (workspace-strategy Phase 8).
 
 ## UI entrypoints
 
@@ -52,8 +52,8 @@ User-facing surfaces for the feature (gated by `SHOW_EXPERIMENTAL_ISSUE_WORKTREE
 
 ## Why this remains experimental
 
-- Teardown and cleanup are not implemented; cleanup is manual.
-- Remote drone does not set process cwd from `context.hiveWorkspace`; local (control-plane-local) adapter uses the realized path.
+- **`on_done` teardown** runs for **done** and **cancelled**; **`on_merged`** runs for **done** only (cancelled leaves the worktree). Set `cleanupPolicy.mode` on the project policy accordingly. Further merge-detection (VCS webhooks) remains future work (workspace-strategy Phase 8).
+- **`hiveWorkspace` on the worker:** `hive-worker` sets process/container cwd from `context.hiveWorkspace` when the path exists **on the drone host** and lies under the configured workspace root (`workspaceDirFromContext` in `infra/worker/internal/link/link.go`). If the control plane created a git worktree only on the **control-plane** machine, a **remote** drone cannot see that filesystem path—this is a **topology / materialization** gap, not absent cwd wiring. Colocate worker and repo, or implement remote checkout/sync (see [ADR 007](../adr/007-remote-execution-workspace.md)).
 - Product-level E2E verification of the full UI workflow is recommended before removing the experimental flag.
 
 ## Defaults
@@ -67,7 +67,7 @@ User-facing surfaces for the feature (gated by `SHOW_EXPERIMENTAL_ISSUE_WORKTREE
 2. Optionally set worktree parent dir (default: `.hive/worktrees` under the repo root). Base ref, branch template, and provision/teardown commands are in advanced settings.
 3. Create or edit an issue: choose "Isolated issue checkout" (or "isolated execution workspace") for that issue when you want a dedicated branch/worktree for it.
 4. On run: the agent gets the worktree as cwd; the board sees branch and path in the workspace-ready comment and run context.
-5. Cleanup: manual until teardown/cleanup policy is implemented. Remove worktrees with `git worktree remove` or run your own teardown script.
+5. Cleanup: if the project uses **`on_done`** cleanup policy, the control plane tears down after **done**/**cancelled**; otherwise remove worktrees with `git worktree remove` or run your own teardown script.
 
 ## Wording and advanced vs normal
 

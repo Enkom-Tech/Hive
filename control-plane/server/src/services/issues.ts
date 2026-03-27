@@ -37,6 +37,7 @@ import {
   defaultIssueExecutionWorkspaceSettingsForProject,
   parseProjectExecutionWorkspacePolicy,
 } from "./execution-workspace-policy.js";
+import { teardownIssueExecutionWorkspaceOnTerminal } from "./workspace-runtime.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
@@ -894,7 +895,7 @@ export function issueService(db: Db) {
         patch.checkoutRunId = null;
       }
 
-      return db.transaction(async (tx) => {
+      const enriched = await db.transaction(async (tx) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
         patch.goalId = resolveNextIssueGoalId({
           currentProjectId: existing.projectId,
@@ -949,9 +950,21 @@ export function issueService(db: Db) {
             });
           }
         }
-        const [enriched] = await withIssueLabels(tx, [updated]);
-        return enriched;
+        const [row] = await withIssueLabels(tx, [updated]);
+        return row;
       });
+
+      if (
+        enriched &&
+        issueData.status &&
+        (issueData.status === ISSUE_STATUS_DONE || issueData.status === ISSUE_STATUS_CANCELLED)
+      ) {
+        void teardownIssueExecutionWorkspaceOnTerminal(db, id).catch(() => {
+          /* best-effort; activity log captures failures inside */
+        });
+      }
+
+      return enriched;
     },
 
     remove: (id: string) =>

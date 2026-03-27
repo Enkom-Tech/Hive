@@ -12,7 +12,7 @@ The Go router (`infra/model-gateway-go`) can POST aggregate usage to the control
 Shipped module: [`../bifrost-hive-metering`](../bifrost-hive-metering) — **`LLMPlugin.PostLLMHook`** that:
 
 1. Hashes the request **`sk-bf-*`** (SHA-256 hex) and calls **`GET /api/internal/hive/gateway-virtual-key-lookup?keyHash=...`** with the operator bearer.
-2. Reads **`usage`** from **`ChatResponse`**, **`TextCompletionResponse`**, or **`ResponsesResponse`** when present (streaming: only hooks that carry usage are counted; duplicate final chunks may double-post until dedupe is added).
+2. Reads **`usage`** from **`ChatResponse`**, **`TextCompletionResponse`**, or **`ResponsesResponse`** when present (streaming: hooks that carry usage are counted; the Hive **`idempotencyKey`** on `POST /api/internal/hive/inference-metering` dedupes identical Bifrost plugin posts and model-gateway posts include a hash of the upstream body).
 
 POST body matches `postMeteringAsync` in `model-gateway-go` (`source: gateway_aggregate`, **`provider: bifrost`** by default). Configure **`operator_bearer`** = **`HIVE_INTERNAL_OPERATOR_SECRET`**.
 
