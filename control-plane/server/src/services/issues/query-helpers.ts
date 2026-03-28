@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Db, DbTransaction } from "@hive/db";
+import { HEARTBEAT_RUN_TERMINAL_STATUS_SET } from "@hive/shared";
 import { heartbeatRuns, issueComments, issueLabels, issueReadStates, issues, labels } from "@hive/db";
 
 /** DB or transaction client for batched issue label/run queries. */
@@ -24,7 +25,8 @@ export function sameRunLock(checkoutRunId: string | null, actorRunId: string | n
   return checkoutRunId == null;
 }
 
-export const TERMINAL_HEARTBEAT_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+/** @deprecated Use HEARTBEAT_RUN_TERMINAL_STATUS_SET from @hive/shared */
+export const TERMINAL_HEARTBEAT_RUN_STATUSES = HEARTBEAT_RUN_TERMINAL_STATUS_SET;
 
 export function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");

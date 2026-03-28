@@ -97,6 +97,8 @@ export function createRunLifecycleQueue(deps: RunLifecycleQueueDeps) {
       if (queuedRuns.length === 0) return [];
 
       const claimedRuns: Array<typeof heartbeatRuns.$inferSelect> = [];
+      // Sequential claims preserve FIFO ordering of live events / wakeup side effects.
+      // A single DB transaction across rows is possible later if profiling warrants it.
       for (const queuedRun of queuedRuns) {
         const claimed = await claimQueuedRun(queuedRun);
         if (claimed) {

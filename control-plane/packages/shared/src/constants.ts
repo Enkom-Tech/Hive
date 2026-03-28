@@ -285,6 +285,17 @@ export const HEARTBEAT_RUN_STATUSES = [
 ] as const;
 export type HeartbeatRunStatus = (typeof HEARTBEAT_RUN_STATUSES)[number];
 
+/** Non-active run outcomes (excludes `queued` and `running`). */
+export const HEARTBEAT_RUN_TERMINAL_STATUSES = [
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+] as const satisfies readonly HeartbeatRunStatus[];
+
+export const HEARTBEAT_RUN_TERMINAL_STATUS_SET = new Set<string>(HEARTBEAT_RUN_TERMINAL_STATUSES);
+export type HeartbeatRunTerminalStatus = (typeof HEARTBEAT_RUN_TERMINAL_STATUSES)[number];
+
 export const LIVE_EVENT_TYPES = [
   "heartbeat.run.queued",
   "heartbeat.run.status",

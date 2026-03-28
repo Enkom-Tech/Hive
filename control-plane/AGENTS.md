@@ -24,8 +24,8 @@ Before making changes, read in this order:
 
 ## 3. Repo Map
 
-- `server/`: Express REST API and orchestration services
-- `ui/`: React + Vite board UI
+- `server/`: Express REST API and orchestration services. Notable layouts: `server/src/routes/access-routes/` (access/invite/join/members/admin/board/skills modules mounted from `routes/access.ts`); `server/src/routes/agents/` (`index.ts` composes adapters/crud/runtime/list/keys/runs/pairing); `server/src/routes/companies/` (`company-routes.ts` composes `company-core-routes`, `company-worker-infra-routes`, `company-inference-gateway-routes`, plus `company-routes-context`); `server/src/routes/worker-api/` (domain route modules + `routes.ts` composer); `server/src/services/company-portability/` (export/import/preview/validate modules + `portability-service` facade); `server/src/services/projects/` (`project-service.ts` facade + `project-service-helpers`); `server/src/services/heartbeat/` (`heartbeat-execution.ts` for run execution, adapter execution prepare/finalize modules); `server/src/services/agents/` includes `agent-worker-token-ops.ts` and `drone-board-overview.ts`.
+- `ui/`: React + Vite board UI. Larger surfaces: `ui/src/components/issue-detail/` (Issue detail hooks + tab/section components; `useIssueDetailPage` in `hooks/`); `ui/src/components/new-issue-dialog/`; `ui/src/components/project-properties/`; `ui/src/components/agent-detail/` (`agent-detail-internals.tsx` composes `agent-detail-view`, parsing/scroll/env helpers, and `agent-detail-run-log-viewer` for `LogViewer`); `ui/src/components/inbox/` (e.g. failed-run card) with `useInboxPageQueries`.
 - `packages/db/`: Drizzle schema, migrations, DB clients
 - `packages/shared/`: shared types, constants, validators, API path constants
 - `doc/`: operational and product docs; `doc/plugins/` — deferred plugin system spec and design rationale

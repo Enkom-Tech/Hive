@@ -20,7 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { User, Hexagon, ArrowUpRight, Tag, Plus, Trash2 } from "lucide-react";
 import { AgentIcon } from "./AgentIconPicker";
 
-// TODO(issue-worktree-support): re-enable this UI once the workflow is ready to ship.
+// Deferred: per-issue worktrees — see doc/plugins/ and product roadmap; re-enable when workflow ships.
 const SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI = true;
 
 interface IssuePropertiesProps {

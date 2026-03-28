@@ -52,5 +52,8 @@ jobs:
       - name: Run tests
         run: pnpm test:coverage
 
+      - name: CLI smoke (non-interactive)
+        run: pnpm hive --help && pnpm hive run --help
+
       - name: Build
         run: pnpm build

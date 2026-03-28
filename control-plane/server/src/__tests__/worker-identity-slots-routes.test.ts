@@ -1,7 +1,7 @@
 import { Router } from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { companyRoutes } from "../routes/companies.js";
+import { companyRoutes } from "../routes/companies/index.js";
 import { createRouteTestApp, principalBoard } from "./helpers/route-app.js";
 
 const mockDb = {} as import("@hive/db").Db;

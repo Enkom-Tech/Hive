@@ -40,9 +40,10 @@ Subprocess mode requires **Postgres**; embedded Postgres is not supported there 
 
 Root `vitest.config.ts` still merges coverage across server, CLI, UI, and packages for optional full-repo reports (`pnpm test:coverage`), without global thresholds.
 
-**Server-only gate:** `server/vitest.config.ts` sets `root` to the server package, runs `src/**/*.test.ts` (and `*.spec.ts`), and enforces v8 **coverage thresholds** on `server/src/**/*.ts` only. CI runs `pnpm test:run` (all Vitest projects) then `pnpm test:coverage:server`. Reports are written under `coverage-server/`. Ratchet thresholds upward slowly when you add tests in a subsystem you own; keep them below the aggregate line rate until the server suite grows.
+**Server-only gate:** `server/vitest.config.ts` sets `root` to the server package, runs `src/**/*.test.ts` (and `*.spec.ts`), and enforces v8 **coverage thresholds** on `server/src/**/*.ts` only (currently **32%** lines). CI runs `pnpm test:run` (all Vitest projects) then `pnpm test:coverage:server`. Reports are written under `coverage-server/`. Ratchet thresholds upward slowly when you add tests in a subsystem you own; keep them below the aggregate line rate until the server suite grows.
 
 ## Related reading
 
+- `doc/HA-READINESS-MATRIX.md` — subsystem → target store matrix when planning multi-replica API.
 - `doc/MANAGED-WORKER-ARCHITECTURE.md` — worker / control-plane WebSocket contract.
 - `doc/K3S-LLM-DEPLOYMENT.md` — example cluster deployment and observability.

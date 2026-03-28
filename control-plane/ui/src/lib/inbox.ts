@@ -148,3 +148,36 @@ export function computeInboxBadgeData({
     alerts,
   };
 }
+
+export const RUN_SOURCE_LABELS: Record<string, string> = {
+  timer: "Scheduled",
+  assignment: "Assignment",
+  on_demand: "Manual",
+  automation: "Automation",
+};
+
+export function firstNonEmptyLine(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const line = value
+    .split("\n")
+    .map((chunk) => chunk.trim())
+    .find(Boolean);
+  return line ?? null;
+}
+
+export function runFailureMessage(run: HeartbeatRun): string {
+  return firstNonEmptyLine(run.error) ?? firstNonEmptyLine(run.stderrExcerpt) ?? "Run exited with an error.";
+}
+
+export function readIssueIdFromRun(run: HeartbeatRun): string | null {
+  const context = run.contextSnapshot;
+  if (!context) return null;
+
+  const issueId = context["issueId"];
+  if (typeof issueId === "string" && issueId.length > 0) return issueId;
+
+  const taskId = context["taskId"];
+  if (typeof taskId === "string" && taskId.length > 0) return taskId;
+
+  return null;
+}

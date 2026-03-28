@@ -1,7 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { companyRoutes } from "../routes/companies.js";
+import { companyRoutes } from "../routes/companies/index.js";
 
 vi.mock("../services/index.js", () => ({
   companyService: () => ({

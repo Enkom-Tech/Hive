@@ -7,7 +7,7 @@ import { healthRoutes } from "./health.js";
 import { releaseRoutes } from "./releases.js";
 import { workerDownloadsRoutes } from "./worker-downloads.js";
 import { workerApiMetricsMiddleware } from "../middleware/worker-api-metrics.js";
-import { workerApiRoutes } from "./worker-api.js";
+import { workerApiRoutes } from "./worker-api/index.js";
 import {
   internalHiveOperatorRoutes,
   internalHiveTrainingCallbackRoutes,
@@ -15,7 +15,7 @@ import {
 import { pluginHostRoutes } from "./plugin-host.js";
 import { e2eMcpSmokeRoutes } from "./e2e-mcp-smoke.js";
 import { createCompanyEventsSSEHandler } from "./events-sse.js";
-import { companyRoutes } from "./companies.js";
+import { companyRoutes } from "./companies/index.js";
 import { agentRoutes } from "./agents/index.js";
 import { assetRoutes } from "./assets.js";
 import { projectRoutes } from "./projects.js";

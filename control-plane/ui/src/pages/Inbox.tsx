@@ -1,19 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "@/lib/router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { approvalsApi } from "../api/approvals";
 import { accessApi } from "../api/access";
-import { sidebarBadgesApi } from "../api/sidebarBadges";
-import { dashboardApi } from "../api/dashboard";
 import { issuesApi } from "../api/issues";
-import { agentsApi } from "../api/agents";
-import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
 import {
-  ISSUE_STATUSES_INBOX,
   ISSUE_STATUS_TODO,
   ISSUE_STATUS_IN_PROGRESS,
   ISSUE_STATUS_BLOCKED,
@@ -24,7 +19,6 @@ import { ApprovalCard } from "../components/ApprovalCard";
 import { IssueRow } from "../components/IssueRow";
 import { PriorityIcon } from "../components/PriorityIcon";
 import { StatusIcon } from "../components/StatusIcon";
-import { StatusBadge } from "../components/StatusBadge";
 import { timeAgo } from "../lib/timeAgo";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -57,9 +51,12 @@ import {
   getLatestFailedRunsByAgent,
   getRecentTouchedIssues,
   type InboxTab,
+  readIssueIdFromRun,
   saveLastInboxTab,
 } from "../lib/inbox";
 import { useDismissedInboxItems } from "../hooks/useInboxBadge";
+import { useInboxPageQueries } from "../hooks/useInboxPageQueries";
+import { FailedRunCard } from "../components/inbox/FailedRunCard";
 
 type InboxCategoryFilter =
   | "everything"
@@ -76,174 +73,6 @@ type SectionKey =
   | "failed_runs"
   | "alerts"
   | "stale_work";
-
-const RUN_SOURCE_LABELS: Record<string, string> = {
-  timer: "Scheduled",
-  assignment: "Assignment",
-  on_demand: "Manual",
-  automation: "Automation",
-};
-
-function firstNonEmptyLine(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const line = value.split("\n").map((chunk) => chunk.trim()).find(Boolean);
-  return line ?? null;
-}
-
-function runFailureMessage(run: HeartbeatRun): string {
-  return firstNonEmptyLine(run.error) ?? firstNonEmptyLine(run.stderrExcerpt) ?? "Run exited with an error.";
-}
-
-function readIssueIdFromRun(run: HeartbeatRun): string | null {
-  const context = run.contextSnapshot;
-  if (!context) return null;
-
-  const issueId = context["issueId"];
-  if (typeof issueId === "string" && issueId.length > 0) return issueId;
-
-  const taskId = context["taskId"];
-  if (typeof taskId === "string" && taskId.length > 0) return taskId;
-
-  return null;
-}
-
-function FailedRunCard({
-  run,
-  issueById,
-  agentName: linkedAgentName,
-  issueLinkState,
-  onDismiss,
-}: {
-  run: HeartbeatRun;
-  issueById: Map<string, Issue>;
-  agentName: string | null;
-  issueLinkState: unknown;
-  onDismiss: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const issueId = readIssueIdFromRun(run);
-  const issue = issueId ? issueById.get(issueId) ?? null : null;
-  const sourceLabel = RUN_SOURCE_LABELS[run.invocationSource] ?? "Manual";
-  const displayError = runFailureMessage(run);
-
-  const retryRun = useMutation({
-    mutationFn: async () => {
-      const payload: Record<string, unknown> = {};
-      const context = run.contextSnapshot as Record<string, unknown> | null;
-      if (context) {
-        if (typeof context.issueId === "string" && context.issueId) payload.issueId = context.issueId;
-        if (typeof context.taskId === "string" && context.taskId) payload.taskId = context.taskId;
-        if (typeof context.taskKey === "string" && context.taskKey) payload.taskKey = context.taskKey;
-      }
-      const result = await agentsApi.wakeup(run.agentId, {
-        source: "on_demand",
-        triggerDetail: "manual",
-        reason: "retry_failed_run",
-        payload,
-      });
-      if (!("id" in result)) {
-        throw new Error("Retry was skipped because the agent is not currently invokable.");
-      }
-      return result;
-    },
-    onSuccess: (newRun) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
-      navigate(`/agents/${run.agentId}/runs/${newRun.id}`);
-    },
-  });
-
-  return (
-    <div className="group relative overflow-hidden rounded-xl border border-red-500/30 bg-linear-to-br from-red-500/10 via-card to-card p-4">
-      <div className="absolute right-0 top-0 h-24 w-24 rounded-full bg-red-500/10 blur-2xl" />
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="absolute right-2 top-2 z-10 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
-        aria-label="Dismiss"
-      >
-        <X className="h-4 w-4" />
-      </button>
-      <div className="relative space-y-3">
-        {issue ? (
-          <Link
-            to={`/issues/${issue.identifier ?? issue.id}`}
-            state={issueLinkState}
-            className="block truncate text-sm font-medium transition-colors hover:text-foreground no-underline text-inherit"
-          >
-            <span className="font-mono text-muted-foreground mr-1.5">
-              {issue.identifier ?? issue.id.slice(0, 8)}
-            </span>
-            {issue.title}
-          </Link>
-        ) : (
-          <span className="block text-sm text-muted-foreground">
-            {run.errorCode ? `Error code: ${run.errorCode}` : "No linked issue"}
-          </span>
-        )}
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-md bg-red-500/20 p-1.5">
-                <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-              </span>
-              {linkedAgentName ? (
-                <Identity name={linkedAgentName} size="sm" />
-              ) : (
-                <span className="text-sm font-medium">Agent {run.agentId.slice(0, 8)}</span>
-              )}
-              <StatusBadge status={run.status} />
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {sourceLabel} run failed {timeAgo(run.createdAt)}
-            </p>
-          </div>
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 shrink-0 px-2.5"
-              onClick={() => retryRun.mutate()}
-              disabled={retryRun.isPending}
-            >
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-              {retryRun.isPending ? "Retrying…" : "Retry"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 shrink-0 px-2.5"
-              asChild
-            >
-              <Link to={`/agents/${run.agentId}/runs/${run.id}`}>
-                Open run
-                <ArrowUpRight className="ml-1.5 h-3.5 w-3.5" />
-              </Link>
-            </Button>
-          </div>
-        </div>
-
-        <div className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm">
-          {displayError}
-        </div>
-
-        <div className="text-xs">
-          <span className="font-mono text-muted-foreground">run {run.id.slice(0, 8)}</span>
-        </div>
-
-        {retryRun.isError && (
-          <div className="text-xs text-destructive">
-            {retryRun.error instanceof Error ? retryRun.error.message : "Failed to retry run"}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export function Inbox() {
   const { selectedCompanyId } = useCompany();
@@ -273,11 +102,24 @@ export function Inbox() {
     [location.pathname, location.search, location.hash],
   );
 
-  const { data: agents } = useQuery({
-    queryKey: queryKeys.agents.list(selectedCompanyId!),
-    queryFn: () => agentsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
+  const {
+    agents,
+    approvals,
+    isApprovalsLoading,
+    approvalsError,
+    joinRequests,
+    isJoinRequestsLoading,
+    sidebarBadges,
+    dashboard,
+    isDashboardLoading,
+    issues,
+    isIssuesLoading,
+    touchedIssuesRaw,
+    isTouchedIssuesLoading,
+    heartbeatRuns,
+    isRunsLoading,
+  } = useInboxPageQueries(selectedCompanyId);
+  const canApproveJoinRequests = sidebarBadges?.canApproveJoinRequests ?? false;
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Inbox" }]);
@@ -286,63 +128,6 @@ export function Inbox() {
   useEffect(() => {
     saveLastInboxTab(tab);
   }, [tab]);
-
-  const {
-    data: approvals,
-    isLoading: isApprovalsLoading,
-    error: approvalsError,
-  } = useQuery({
-    queryKey: queryKeys.approvals.list(selectedCompanyId!),
-    queryFn: () => approvalsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-
-  const {
-    data: joinRequests = [],
-    isLoading: isJoinRequestsLoading,
-  } = useQuery({
-    queryKey: queryKeys.access.joinRequests(selectedCompanyId!),
-    queryFn: () => accessApi.listJoinRequests(selectedCompanyId!, "pending_approval"),
-    enabled: !!selectedCompanyId,
-  });
-
-  const { data: sidebarBadges } = useQuery({
-    queryKey: queryKeys.sidebarBadges(selectedCompanyId!),
-    queryFn: () => sidebarBadgesApi.get(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-    staleTime: 30_000,
-  });
-  const canApproveJoinRequests = sidebarBadges?.canApproveJoinRequests ?? false;
-
-  const { data: dashboard, isLoading: isDashboardLoading } = useQuery({
-    queryKey: queryKeys.dashboard(selectedCompanyId!),
-    queryFn: () => dashboardApi.summary(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-
-  const { data: issues, isLoading: isIssuesLoading } = useQuery({
-    queryKey: queryKeys.issues.list(selectedCompanyId!),
-    queryFn: () => issuesApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
-  const {
-    data: touchedIssuesRaw = [],
-    isLoading: isTouchedIssuesLoading,
-  } = useQuery({
-    queryKey: queryKeys.issues.listTouchedByMe(selectedCompanyId!),
-    queryFn: () =>
-      issuesApi.list(selectedCompanyId!, {
-        touchedByUserId: "me",
-        status: ISSUE_STATUSES_INBOX.join(","),
-      }),
-    enabled: !!selectedCompanyId,
-  });
-
-  const { data: heartbeatRuns, isLoading: isRunsLoading } = useQuery({
-    queryKey: queryKeys.heartbeats(selectedCompanyId!),
-    queryFn: () => heartbeatsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-  });
 
   const touchedIssues = useMemo(() => getRecentTouchedIssues(touchedIssuesRaw), [touchedIssuesRaw]);
   const unreadTouchedIssues = useMemo(

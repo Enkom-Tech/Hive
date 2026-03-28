@@ -10,116 +10,29 @@ import { assetsApi } from "../api/assets";
 import { queryKeys } from "../lib/queryKeys";
 import { departmentsApi } from "../api/departments";
 import { useProjectOrder } from "../hooks/useProjectOrder";
-import { getRecentAssigneeIds, sortAgentsByRecency, trackRecentAssignee } from "../lib/recent-assignees";
-import {
-  Dialog,
-  DialogContent,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Maximize2,
-  Minimize2,
-  MoreHorizontal,
-  ChevronRight,
-  ChevronDown,
-  CircleDot,
-  Minus,
-  ArrowUp,
-  ArrowDown,
-  AlertTriangle,
-  Tag,
-  Calendar,
-  Hexagon,
-  Loader2,
-} from "lucide-react";
+import { getRecentAssigneeIds, sortAgentsByRecency } from "../lib/recent-assignees";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn } from "../lib/utils";
-import { issueStatusText, issueStatusTextDefault, priorityColor, priorityColorDefault } from "../lib/status-colors";
 import type { IssueStatus } from "@hive/shared";
-import { ISSUE_STATUS_ORDER, ISSUE_STATUS_LABELS, ISSUE_STATUS_TODO } from "@hive/shared";
+import { ISSUE_STATUS_TODO } from "@hive/shared";
 import { MarkdownEditor, type MarkdownEditorRef, type MentionOption } from "./MarkdownEditor";
-import { AgentIcon } from "./AgentIconPicker";
-import { InlineEntitySelector, type InlineEntityOption } from "./InlineEntitySelector";
-
-const DRAFT_KEY = "hive:issue-draft";
-const DEBOUNCE_MS = 800;
-// TODO(issue-worktree-support): re-enable this UI once the workflow is ready to ship.
-const SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI = true;
-
-/** Return black or white hex based on background luminance (WCAG perceptual weights). */
-function getContrastTextColor(hexColor: string): string {
-  const hex = hexColor.replace("#", "");
-  const r = parseInt(hex.substring(0, 2), 16);
-  const g = parseInt(hex.substring(2, 4), 16);
-  const b = parseInt(hex.substring(4, 6), 16);
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return luminance > 0.5 ? "#000000" : "#ffffff";
-}
-
-interface IssueDraft {
-  title: string;
-  description: string;
-  status: string;
-  priority: string;
-  assigneeId: string;
-  projectId: string;
-  departmentId: string;
-  assigneeModelOverride: string;
-  assigneeThinkingEffort: string;
-  assigneeChrome: boolean;
-  useIsolatedExecutionWorkspace: boolean;
-}
-
-/** Per-issue adapter overrides are not used; all agents use managed_worker. */
-function buildAssigneeAdapterOverrides(_input: {
-  adapterType: string | null | undefined;
-  modelOverride: string;
-  thinkingEffortOverride: string;
-  chrome: boolean;
-}): Record<string, unknown> | null {
-  return null;
-}
-
-function loadDraft(): IssueDraft | null {
-  try {
-    const raw = localStorage.getItem(DRAFT_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as IssueDraft;
-  } catch {
-    return null;
-  }
-}
-
-function saveDraft(draft: IssueDraft) {
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-}
-
-function clearDraft() {
-  localStorage.removeItem(DRAFT_KEY);
-}
-
-const statuses = ISSUE_STATUS_ORDER.map((value) => ({
-  value,
-  label: ISSUE_STATUS_LABELS[value],
-  color: issueStatusText[value] ?? issueStatusTextDefault,
-}));
-
-const requiresQualityReviewOptions = [
-  { value: "default", label: "Company default", payload: null as boolean | null },
-  { value: "yes", label: "Yes", payload: true },
-  { value: "no", label: "No", payload: false },
-];
-
-const priorities = [
-  { value: "critical", label: "Critical", icon: AlertTriangle, color: priorityColor.critical ?? priorityColorDefault },
-  { value: "high", label: "High", icon: ArrowUp, color: priorityColor.high ?? priorityColorDefault },
-  { value: "medium", label: "Medium", icon: Minus, color: priorityColor.medium ?? priorityColorDefault },
-  { value: "low", label: "Low", icon: ArrowDown, color: priorityColor.low ?? priorityColorDefault },
-];
+import type { InlineEntityOption } from "./InlineEntitySelector";
+import {
+  NEW_ISSUE_DRAFT_DEBOUNCE_MS,
+  clearNewIssueDraft,
+  loadNewIssueDraft,
+  saveNewIssueDraft,
+  type NewIssueDraft,
+} from "./new-issue-dialog/new-issue-draft";
+import {
+  SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI,
+  newIssueDialogRequiresQualityReviewOptions,
+} from "./new-issue-dialog/new-issue-dialog-constants";
+import { NewIssueDialogHeader } from "./new-issue-dialog/NewIssueDialogHeader";
+import { NewIssueDialogEntityRow } from "./new-issue-dialog/NewIssueDialogEntityRow";
+import { NewIssueDialogExecutionWorkspaceToggle } from "./new-issue-dialog/NewIssueDialogExecutionWorkspaceToggle";
+import { NewIssueDialogPropertyChips } from "./new-issue-dialog/NewIssueDialogPropertyChips";
+import { NewIssueDialogFooter } from "./new-issue-dialog/NewIssueDialogFooter";
 
 export function NewIssueDialog() {
   const { newIssueOpen, newIssueDefaults, closeNewIssue } = useDialog();
@@ -132,13 +45,14 @@ export function NewIssueDialog() {
   const [assigneeId, setAssigneeId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
-  const [assigneeOptionsOpen, setAssigneeOptionsOpen] = useState(false);
   const [assigneeModelOverride, setAssigneeModelOverride] = useState("");
   const [assigneeThinkingEffort, setAssigneeThinkingEffort] = useState("");
   const [assigneeChrome, setAssigneeChrome] = useState(false);
   const [useIsolatedExecutionWorkspace, setUseIsolatedExecutionWorkspace] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [requiresQualityReviewOption, setRequiresQualityReviewOption] = useState<"default" | "yes" | "no">("default");
+  const [requiresQualityReviewOption, setRequiresQualityReviewOption] = useState<"default" | "yes" | "no">(
+    "default",
+  );
   const [dialogCompanyId, setDialogCompanyId] = useState<string | null>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executionWorkspaceDefaultProjectId = useRef<string | null>(null);
@@ -146,7 +60,6 @@ export function NewIssueDialog() {
   const effectiveCompanyId = dialogCompanyId ?? selectedCompanyId;
   const dialogCompany = companies.find((c) => c.id === effectiveCompanyId) ?? selectedCompany;
 
-  // Popover states
   const [statusOpen, setStatusOpen] = useState(false);
   const [priorityOpen, setPriorityOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -215,7 +128,7 @@ export function NewIssueDialog() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(effectiveCompanyId!) });
       if (draftTimer.current) clearTimeout(draftTimer.current);
-      clearDraft();
+      clearNewIssueDraft();
       reset();
       closeNewIssue();
     },
@@ -228,18 +141,13 @@ export function NewIssueDialog() {
     },
   });
 
-  // Debounced draft saving
-  const scheduleSave = useCallback(
-    (draft: IssueDraft) => {
-      if (draftTimer.current) clearTimeout(draftTimer.current);
-      draftTimer.current = setTimeout(() => {
-        if (draft.title.trim()) saveDraft(draft);
-      }, DEBOUNCE_MS);
-    },
-    [],
-  );
+  const scheduleSave = useCallback((draft: NewIssueDraft) => {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      if (draft.title.trim()) saveNewIssueDraft(draft);
+    }, NEW_ISSUE_DRAFT_DEBOUNCE_MS);
+  }, []);
 
-  // Save draft on meaningful changes
   useEffect(() => {
     if (!newIssueOpen) return;
     scheduleSave({
@@ -271,13 +179,12 @@ export function NewIssueDialog() {
     scheduleSave,
   ]);
 
-  // Restore draft or apply defaults when dialog opens
   useEffect(() => {
     if (!newIssueOpen) return;
     setDialogCompanyId(selectedCompanyId);
     executionWorkspaceDefaultProjectId.current = null;
 
-    const draft = loadDraft();
+    const draft = loadNewIssueDraft();
     if (newIssueDefaults.title) {
       setTitle(newIssueDefaults.title);
       setDescription(newIssueDefaults.description ?? "");
@@ -317,14 +224,12 @@ export function NewIssueDialog() {
 
   useEffect(() => {
     if (!supportsAssigneeOverrides) {
-      setAssigneeOptionsOpen(false);
       setAssigneeModelOverride("");
       setAssigneeThinkingEffort("");
       setAssigneeChrome(false);
     }
   }, [supportsAssigneeOverrides]);
 
-  // Cleanup timer on unmount
   useEffect(() => {
     return () => {
       if (draftTimer.current) clearTimeout(draftTimer.current);
@@ -339,7 +244,6 @@ export function NewIssueDialog() {
     setAssigneeId("");
     setProjectId("");
     setDepartmentId("");
-    setAssigneeOptionsOpen(false);
     setAssigneeModelOverride("");
     setAssigneeThinkingEffort("");
     setAssigneeChrome(false);
@@ -363,7 +267,7 @@ export function NewIssueDialog() {
   }
 
   function discardDraft() {
-    clearDraft();
+    clearNewIssueDraft();
     reset();
     closeNewIssue();
   }
@@ -371,7 +275,8 @@ export function NewIssueDialog() {
   function handleSubmit() {
     if (!effectiveCompanyId || !title.trim() || createIssue.isPending) return;
     const requiresQualityReview =
-      requiresQualityReviewOptions.find((o) => o.value === requiresQualityReviewOption)?.payload ?? null;
+      newIssueDialogRequiresQualityReviewOptions.find((o) => o.value === requiresQualityReviewOption)?.payload ??
+      null;
     const selectedProject = orderedProjects.find((project) => project.id === projectId);
     const executionWorkspacePolicy = SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI
       ? selectedProject?.executionWorkspacePolicy
@@ -418,8 +323,6 @@ export function NewIssueDialog() {
   }
 
   const hasDraft = title.trim().length > 0 || description.trim().length > 0;
-  const currentStatus = statuses.find((s) => s.value === status) ?? statuses[1]!;
-  const currentPriority = priorities.find((p) => p.value === priority);
   const currentAssignee = (agents ?? []).find((a) => a.id === assigneeId);
   const currentProject = orderedProjects.find((project) => project.id === projectId);
   const currentDepartment = (departments ?? []).find((department) => department.id === departmentId);
@@ -458,19 +361,22 @@ export function NewIssueDialog() {
       })),
     [departments],
   );
-  const savedDraft = loadDraft();
+  const savedDraft = loadNewIssueDraft();
   const hasSavedDraft = Boolean(savedDraft?.title.trim() || savedDraft?.description.trim());
   const canDiscardDraft = hasDraft || hasSavedDraft;
   const createIssueErrorMessage =
     createIssue.error instanceof Error ? createIssue.error.message : "Failed to create issue. Try again.";
 
-  const handleProjectChange = useCallback((nextProjectId: string) => {
-    setProjectId(nextProjectId);
-    const nextProject = orderedProjects.find((project) => project.id === nextProjectId);
-    const policy = SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI ? nextProject?.executionWorkspacePolicy : null;
-    executionWorkspaceDefaultProjectId.current = nextProjectId || null;
-    setUseIsolatedExecutionWorkspace(Boolean(policy?.enabled && policy.defaultMode === "isolated"));
-  }, [orderedProjects]);
+  const handleProjectChange = useCallback(
+    (nextProjectId: string) => {
+      setProjectId(nextProjectId);
+      const nextProject = orderedProjects.find((project) => project.id === nextProjectId);
+      const policy = SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI ? nextProject?.executionWorkspacePolicy : null;
+      executionWorkspaceDefaultProjectId.current = nextProjectId || null;
+      setUseIsolatedExecutionWorkspace(Boolean(policy?.enabled && policy.defaultMode === "isolated"));
+    },
+    [orderedProjects],
+  );
 
   useEffect(() => {
     if (!newIssueOpen || !projectId || executionWorkspaceDefaultProjectId.current === projectId) {
@@ -482,11 +388,12 @@ export function NewIssueDialog() {
     setUseIsolatedExecutionWorkspace(
       Boolean(
         SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI &&
-        project.executionWorkspacePolicy?.enabled &&
-        project.executionWorkspacePolicy.defaultMode === "isolated",
+          project.executionWorkspacePolicy?.enabled &&
+          project.executionWorkspacePolicy.defaultMode === "isolated",
       ),
     );
   }, [newIssueOpen, orderedProjects, projectId]);
+
   return (
     <Dialog
       open={newIssueOpen}
@@ -499,9 +406,7 @@ export function NewIssueDialog() {
         aria-describedby={undefined}
         className={cn(
           "p-0 gap-0 flex flex-col max-h-[calc(100dvh-2rem)]",
-          expanded
-            ? "sm:max-w-2xl h-[calc(100dvh-2rem)]"
-            : "sm:max-w-lg"
+          expanded ? "sm:max-w-2xl h-[calc(100dvh-2rem)]" : "sm:max-w-lg",
         )}
         onKeyDown={handleKeyDown}
         onEscapeKeyDown={(event) => {
@@ -514,100 +419,25 @@ export function NewIssueDialog() {
             event.preventDefault();
             return;
           }
-          // Radix Dialog's modal DismissableLayer calls preventDefault() on
-          // pointerdown events that originate outside the Dialog DOM tree.
-          // Popover portals render at the body level (outside the Dialog), so
-          // touch events on popover content get their default prevented — which
-          // kills scroll gesture recognition on mobile.  Telling Radix "this
-          // event is handled" skips that preventDefault, restoring touch scroll.
           const target = event.detail.originalEvent.target as HTMLElement | null;
           if (target?.closest("[data-radix-popper-content-wrapper]")) {
             event.preventDefault();
           }
         }}
       >
-        {/* Header bar */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Popover open={companyOpen} onOpenChange={setCompanyOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  className={cn(
-                    "px-1.5 py-0.5 rounded text-xs font-semibold cursor-pointer hover:opacity-80 transition-opacity",
-                    !dialogCompany?.brandColor && "bg-muted",
-                  )}
-                  style={
-                    dialogCompany?.brandColor
-                      ? {
-                          backgroundColor: dialogCompany.brandColor,
-                          color: getContrastTextColor(dialogCompany.brandColor),
-                        }
-                      : undefined
-                  }
-                >
-                  {(dialogCompany?.name ?? "").slice(0, 3).toUpperCase()}
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-48 p-1" align="start">
-                {companies.filter((c) => c.status !== "archived").map((c) => (
-                  <button
-                    key={c.id}
-                    className={cn(
-                      "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 cursor-pointer",
-                      c.id === effectiveCompanyId && "bg-accent",
-                    )}
-                    onClick={() => {
-                      handleCompanyChange(c.id);
-                      setCompanyOpen(false);
-                    }}
-                  >
-                    <span
-                      className={cn(
-                        "px-1 py-0.5 rounded text-[10px] font-semibold leading-none",
-                        !c.brandColor && "bg-muted",
-                      )}
-                      style={
-                        c.brandColor
-                          ? {
-                              backgroundColor: c.brandColor,
-                              color: getContrastTextColor(c.brandColor),
-                            }
-                          : undefined
-                      }
-                    >
-                      {c.name.slice(0, 3).toUpperCase()}
-                    </span>
-                    <span className="truncate">{c.name}</span>
-                  </button>
-                ))}
-              </PopoverContent>
-            </Popover>
-            <span className="text-muted-foreground/60">&rsaquo;</span>
-            <span>New issue</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="text-muted-foreground"
-              onClick={() => setExpanded(!expanded)}
-              disabled={createIssue.isPending}
-            >
-              {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="text-muted-foreground"
-              onClick={() => closeNewIssue()}
-              disabled={createIssue.isPending}
-            >
-              <span className="text-lg leading-none">&times;</span>
-            </Button>
-          </div>
-        </div>
+        <NewIssueDialogHeader
+          companies={companies}
+          dialogCompany={dialogCompany}
+          effectiveCompanyId={effectiveCompanyId}
+          companyOpen={companyOpen}
+          setCompanyOpen={setCompanyOpen}
+          onCompanyChange={handleCompanyChange}
+          expanded={expanded}
+          setExpanded={setExpanded}
+          createPending={createIssue.isPending}
+          onClose={closeNewIssue}
+        />
 
-        {/* Title */}
         <div className="px-4 pt-4 pb-2 shrink-0">
           <textarea
             className="w-full text-lg font-semibold bg-transparent outline-none resize-none overflow-hidden placeholder:text-muted-foreground/50"
@@ -621,12 +451,7 @@ export function NewIssueDialog() {
             }}
             readOnly={createIssue.isPending}
             onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                !e.metaKey &&
-                !e.ctrlKey &&
-                !e.nativeEvent.isComposing
-              ) {
+              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 descriptionEditorRef.current?.focus();
               }
@@ -639,142 +464,41 @@ export function NewIssueDialog() {
           />
         </div>
 
-        <div className="px-4 pb-2 shrink-0">
-          <div className="overflow-x-auto overscroll-x-contain">
-            <div className="inline-flex items-center gap-2 text-sm text-muted-foreground flex-wrap sm:flex-nowrap sm:min-w-max">
-              <span>For</span>
-              <InlineEntitySelector
-                ref={assigneeSelectorRef}
-                value={assigneeId}
-                options={assigneeOptions}
-                placeholder="Assignee"
-                disablePortal
-                noneLabel="No assignee"
-                searchPlaceholder="Search assignees..."
-                emptyMessage="No assignees found."
-                onChange={(id) => { if (id) trackRecentAssignee(id); setAssigneeId(id); }}
-                onConfirm={() => {
-                  projectSelectorRef.current?.focus();
-                }}
-                renderTriggerValue={(option) =>
-                  option && currentAssignee ? (
-                    <>
-                      <AgentIcon icon={currentAssignee.icon} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{option.label}</span>
-                    </>
-                  ) : (
-                    <span className="text-muted-foreground">Assignee</span>
-                  )
-                }
-                renderOption={(option) => {
-                  if (!option.id) return <span className="truncate">{option.label}</span>;
-                  const assignee = (agents ?? []).find((agent) => agent.id === option.id);
-                  return (
-                    <>
-                      <AgentIcon icon={assignee?.icon} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{option.label}</span>
-                    </>
-                  );
-                }}
-              />
-              <span>in</span>
-              <InlineEntitySelector
-                ref={projectSelectorRef}
-                value={projectId}
-                options={projectOptions}
-                placeholder="Project"
-                disablePortal
-                noneLabel="No project"
-                searchPlaceholder="Search projects..."
-                emptyMessage="No projects found."
-                onChange={handleProjectChange}
-                onConfirm={() => {
-                  departmentSelectorRef.current?.focus();
-                }}
-                renderTriggerValue={(option) =>
-                  option && currentProject ? (
-                    <>
-                      <span
-                        className="h-3.5 w-3.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: currentProject.color ?? "#6366f1" }}
-                      />
-                      <span className="truncate">{option.label}</span>
-                    </>
-                  ) : (
-                    <span className="text-muted-foreground">Project</span>
-                  )
-                }
-                renderOption={(option) => {
-                  if (!option.id) return <span className="truncate">{option.label}</span>;
-                  const project = orderedProjects.find((item) => item.id === option.id);
-                  return (
-                    <>
-                      <span
-                        className="h-3.5 w-3.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: project?.color ?? "#6366f1" }}
-                      />
-                      <span className="truncate">{option.label}</span>
-                    </>
-                  );
-                }}
-              />
-              <span>for</span>
-              <InlineEntitySelector
-                ref={departmentSelectorRef}
-                value={departmentId}
-                options={departmentOptions}
-                placeholder="Department"
-                disablePortal
-                noneLabel="No department"
-                searchPlaceholder="Search departments..."
-                emptyMessage="No departments found."
-                onChange={setDepartmentId}
-                onConfirm={() => {
-                  descriptionEditorRef.current?.focus();
-                }}
-                renderTriggerValue={(option) =>
-                  option && currentDepartment ? (
-                    <span className="truncate">{option.label}</span>
-                  ) : (
-                    <span className="text-muted-foreground">Department</span>
-                  )
-                }
-                renderOption={(option) => <span className="truncate">{option.label}</span>}
-              />
-            </div>
-          </div>
-        </div>
+        <NewIssueDialogEntityRow
+          assigneeSelectorRef={assigneeSelectorRef}
+          projectSelectorRef={projectSelectorRef}
+          departmentSelectorRef={departmentSelectorRef}
+          assigneeId={assigneeId}
+          setAssigneeId={setAssigneeId}
+          projectId={projectId}
+          departmentId={departmentId}
+          setDepartmentId={setDepartmentId}
+          assigneeOptions={assigneeOptions}
+          projectOptions={projectOptions}
+          departmentOptions={departmentOptions}
+          agents={agents}
+          orderedProjects={orderedProjects}
+          departments={departments}
+          currentAssignee={currentAssignee}
+          currentProject={currentProject}
+          currentDepartment={currentDepartment}
+          onProjectChange={handleProjectChange}
+          descriptionEditorRef={descriptionEditorRef}
+        />
 
         {currentProjectSupportsExecutionWorkspace && (
-          <div className="px-4 pb-2 shrink-0">
-            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
-              <div className="space-y-0.5">
-                <div className="text-xs font-medium">Use isolated issue checkout</div>
-                <div className="text-[11px] text-muted-foreground">
-                  Create an issue-specific execution workspace instead of using the project's primary checkout.
-                </div>
-              </div>
-              <button
-                className={cn(
-                  "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
-                  useIsolatedExecutionWorkspace ? "bg-green-600" : "bg-muted",
-                )}
-                onClick={() => setUseIsolatedExecutionWorkspace((value) => !value)}
-                type="button"
-              >
-                <span
-                  className={cn(
-                    "inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform",
-                    useIsolatedExecutionWorkspace ? "translate-x-4.5" : "translate-x-0.5",
-                  )}
-                />
-              </button>
-            </div>
-          </div>
+          <NewIssueDialogExecutionWorkspaceToggle
+            useIsolatedExecutionWorkspace={useIsolatedExecutionWorkspace}
+            setUseIsolatedExecutionWorkspace={setUseIsolatedExecutionWorkspace}
+          />
         )}
 
-        {/* Description */}
-        <div className={cn("px-4 pb-2 overflow-y-auto min-h-0 border-t border-border/60 pt-3", expanded ? "flex-1" : "")}>
+        <div
+          className={cn(
+            "px-4 pb-2 overflow-y-auto min-h-0 border-t border-border/60 pt-3",
+            expanded ? "flex-1" : "",
+          )}
+        >
           <MarkdownEditor
             ref={descriptionEditorRef}
             value={description}
@@ -790,165 +514,32 @@ export function NewIssueDialog() {
           />
         </div>
 
-        {/* Property chips bar */}
-        <div className="flex items-center gap-1.5 px-4 py-2 border-t border-border flex-wrap shrink-0">
-          {/* Status chip */}
-          <Popover open={statusOpen} onOpenChange={setStatusOpen}>
-            <PopoverTrigger asChild>
-              <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors cursor-pointer">
-                <CircleDot className={cn("h-3 w-3", currentStatus.color)} />
-                {currentStatus.label}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-36 p-1" align="start">
-              {statuses.map((s) => (
-                <button
-                  key={s.value}
-                  className={cn(
-                    "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 cursor-pointer",
-                    s.value === status && "bg-accent"
-                  )}
-                  onClick={() => { setStatus(s.value); setStatusOpen(false); }}
-                >
-                  <CircleDot className={cn("h-3 w-3", s.color)} />
-                  {s.label}
-                </button>
-              ))}
-            </PopoverContent>
-          </Popover>
+        <NewIssueDialogPropertyChips
+          status={status}
+          setStatus={setStatus}
+          priority={priority}
+          setPriority={setPriority}
+          statusOpen={statusOpen}
+          setStatusOpen={setStatusOpen}
+          priorityOpen={priorityOpen}
+          setPriorityOpen={setPriorityOpen}
+          moreOpen={moreOpen}
+          setMoreOpen={setMoreOpen}
+          requiresQualityReviewOption={requiresQualityReviewOption}
+          setRequiresQualityReviewOption={setRequiresQualityReviewOption}
+          attachInputRef={attachInputRef}
+          onAttachImage={handleAttachImage}
+          uploadDescriptionImage={uploadDescriptionImage}
+        />
 
-          {/* Priority chip */}
-          <Popover open={priorityOpen} onOpenChange={setPriorityOpen}>
-            <PopoverTrigger asChild>
-              <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors cursor-pointer">
-                {currentPriority ? (
-                  <>
-                    <currentPriority.icon className={cn("h-3 w-3", currentPriority.color)} />
-                    {currentPriority.label}
-                  </>
-                ) : (
-                  <>
-                    <Minus className="h-3 w-3 text-muted-foreground" />
-                    Priority
-                  </>
-                )}
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-36 p-1" align="start">
-              {priorities.map((p) => (
-                <button
-                  key={p.value}
-                  className={cn(
-                    "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 cursor-pointer",
-                    p.value === priority && "bg-accent"
-                  )}
-                  onClick={() => { setPriority(p.value); setPriorityOpen(false); }}
-                >
-                  <p.icon className={cn("h-3 w-3", p.color)} />
-                  {p.label}
-                </button>
-              ))}
-            </PopoverContent>
-          </Popover>
-
-          {/* Labels chip (placeholder) */}
-          <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors text-muted-foreground cursor-pointer">
-            <Tag className="h-3 w-3" />
-            Labels
-          </button>
-
-          {/* Attach image chip */}
-          <input
-            ref={attachInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            className="hidden"
-            onChange={handleAttachImage}
-          />
-          <button
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent/50 transition-colors text-muted-foreground cursor-pointer"
-            onClick={() => attachInputRef.current?.click()}
-            disabled={uploadDescriptionImage.isPending}
-          >
-            <Hexagon className="h-3 w-3" />
-            {uploadDescriptionImage.isPending ? "Uploading..." : "Image"}
-          </button>
-
-          {/* More (dates) */}
-          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-            <PopoverTrigger asChild>
-              <button className="inline-flex items-center justify-center rounded-md border border-border p-1 text-xs hover:bg-accent/50 transition-colors text-muted-foreground cursor-pointer">
-                <MoreHorizontal className="h-3 w-3" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-52 p-1" align="start">
-              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground border-b border-border mb-1">
-                Require quality review
-              </div>
-              {requiresQualityReviewOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={cn(
-                    "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-left cursor-pointer",
-                    requiresQualityReviewOption === opt.value ? "bg-accent/50 text-foreground" : "text-muted-foreground",
-                  )}
-                  onClick={() => {
-                    setRequiresQualityReviewOption(opt.value as "default" | "yes" | "no");
-                    setMoreOpen(false);
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-              <button className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground mt-1 cursor-pointer">
-                <Calendar className="h-3 w-3" />
-                Start date
-              </button>
-              <button className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-muted-foreground cursor-pointer">
-                <Calendar className="h-3 w-3" />
-                Due date
-              </button>
-            </PopoverContent>
-          </Popover>
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-t border-border shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            onClick={discardDraft}
-            disabled={createIssue.isPending || !canDiscardDraft}
-          >
-            Discard Draft
-          </Button>
-          <div className="flex items-center gap-3">
-            <div className="min-h-5 text-right">
-              {createIssue.isPending ? (
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Creating issue...
-                </span>
-              ) : createIssue.isError ? (
-                <span className="text-xs text-destructive">{createIssueErrorMessage}</span>
-              ) : null}
-            </div>
-            <Button
-              size="sm"
-              className="min-w-34 disabled:opacity-100"
-              disabled={!title.trim() || createIssue.isPending}
-              onClick={handleSubmit}
-              aria-busy={createIssue.isPending}
-            >
-              <span className="inline-flex items-center justify-center gap-1.5">
-                {createIssue.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                <span>{createIssue.isPending ? "Creating..." : "Create Issue"}</span>
-              </span>
-            </Button>
-          </div>
-        </div>
+        <NewIssueDialogFooter
+          title={title}
+          createIssue={createIssue}
+          createIssueErrorMessage={createIssueErrorMessage}
+          canDiscardDraft={canDiscardDraft}
+          onDiscardDraft={discardDraft}
+          onSubmit={handleSubmit}
+        />
       </DialogContent>
     </Dialog>
   );

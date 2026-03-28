@@ -71,6 +71,8 @@ pnpm hive run
 2. `hive doctor` with repair enabled
 3. starts the server when checks pass
 
+**Packaging:** For published installs with Postgres, the CLI can start the API in a **child process** (`dist/index.js`) instead of loading `@hive/server` in-process. See `doc/CONTROL-PLANE-SCALING-AND-HA.md` (`HIVE_CLI_SERVER_SUBPROCESS`, default heuristics). Monorepo `pnpm dev` / checkout with `server/src` stays in-process for ergonomics.
+
 ## Docker Quickstart (No local Node install)
 
 Build and run Hive in Docker:

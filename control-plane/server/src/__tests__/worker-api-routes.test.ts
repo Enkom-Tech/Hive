@@ -9,7 +9,7 @@ import {
   resetPrometheusRegistryForTests,
 } from "../placement-metrics.js";
 import { forbidden } from "../errors.js";
-import { workerApiRoutes } from "../routes/worker-api.js";
+import { workerApiRoutes } from "../routes/worker-api/index.js";
 import {
   createRouteTestApp,
   principalAgent,

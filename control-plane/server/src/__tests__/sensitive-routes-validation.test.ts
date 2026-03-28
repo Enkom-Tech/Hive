@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Db } from "@hive/db";
 import { accessRoutes } from "../routes/access.js";
 import { approvalRoutes } from "../routes/approvals.js";
-import { companyRoutes } from "../routes/companies.js";
+import { companyRoutes } from "../routes/companies/index.js";
 import { errorHandler } from "../middleware/error-handler.js";
 
 const mockApprovalService = vi.hoisted(() => ({

@@ -8,7 +8,7 @@ import {
   inferenceModels,
   modelTrainingRuns,
 } from "@hive/db";
-import { companyRoutes } from "../routes/companies.js";
+import { companyRoutes } from "../routes/companies/index.js";
 import { createRouteTestApp, principalBoard } from "./helpers/route-app.js";
 
 const companyId = "550e8400-e29b-41d4-a716-446655440000";

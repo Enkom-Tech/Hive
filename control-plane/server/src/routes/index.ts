@@ -1,6 +1,6 @@
 export { healthRoutes } from "./health.js";
 export { instanceRoutes } from "./instance.js";
-export { companyRoutes } from "./companies.js";
+export { companyRoutes } from "./companies/index.js";
 export { agentRoutes } from "./agents/index.js";
 export { projectRoutes } from "./projects.js";
 export { issueRoutes } from "./issues.js";

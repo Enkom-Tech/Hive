@@ -1,13 +1,13 @@
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { heartbeatRuns, issues } from "@hive/db";
-import { ISSUE_STATUS_IN_PROGRESS, ISSUE_STATUS_TODO } from "@hive/shared";
-import { conflict, notFound } from "../../errors.js";
 import {
-  sameRunLock,
-  TERMINAL_HEARTBEAT_RUN_STATUSES,
-  withIssueLabels,
-} from "./query-helpers.js";
+  HEARTBEAT_RUN_TERMINAL_STATUS_SET,
+  ISSUE_STATUS_IN_PROGRESS,
+  ISSUE_STATUS_TODO,
+} from "@hive/shared";
+import { conflict, notFound } from "../../errors.js";
+import { sameRunLock, withIssueLabels } from "./query-helpers.js";
 import type { createAssigneeAssertions } from "./assignees.js";
 
 type AssigneeAssertions = ReturnType<typeof createAssigneeAssertions>;
@@ -22,7 +22,7 @@ export function createIssueCheckoutOps(db: Db, assignees: AssigneeAssertions) {
       .where(eq(heartbeatRuns.id, runId))
       .then((rows) => rows[0] ?? null);
     if (!run) return true;
-    return TERMINAL_HEARTBEAT_RUN_STATUSES.has(run.status);
+    return HEARTBEAT_RUN_TERMINAL_STATUS_SET.has(run.status);
   }
 
   async function adoptStaleCheckoutRun(input: {
