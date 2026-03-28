@@ -29,6 +29,8 @@ Before making changes, read in this order:
 - `packages/db/`: Drizzle schema, migrations, DB clients
 - `packages/shared/`: shared types, constants, validators, API path constants
 - `doc/`: operational and product docs; `doc/plugins/` — deferred plugin system spec and design rationale
+- `docs/`: user-facing Mintlify docs (separate from `doc/`). Edit `doc/` for implementation contracts and engineering notes; edit `docs/` for end-user or operator guides published to the doc site.
+- `doc/CONTROL-PLANE-SCALING-AND-HA.md` — single-replica vs multi-replica assumptions, worker Redis bus, CLI subprocess defaults, and the server-only coverage gate (`pnpm test:coverage:server`).
 
 ## 4. Dev Setup (Auto DB)
 

@@ -27,19 +27,16 @@ import {
   FolderGit,
   GitBranch,
 } from "lucide-react";
-import { PROJECT_COLORS } from "@hive/shared";
+import { PROJECT_COLORS, PROJECT_STATUSES, PROJECT_STATUS_LABELS, type ProjectStatus } from "@hive/shared";
 import { cn } from "../lib/utils";
 import { MarkdownEditor, type MarkdownEditorRef } from "./MarkdownEditor";
 import { StatusBadge } from "./StatusBadge";
 import { ChoosePathButton } from "./PathInstructionsModal";
 
-const projectStatuses = [
-  { value: "backlog", label: "Backlog" },
-  { value: "planned", label: "Planned" },
-  { value: "in_progress", label: "In Progress" },
-  { value: "completed", label: "Completed" },
-  { value: "cancelled", label: "Cancelled" },
-];
+const projectStatuses = PROJECT_STATUSES.map((value: ProjectStatus) => ({
+  value,
+  label: PROJECT_STATUS_LABELS[value],
+}));
 
 type WorkspaceSetup = "none" | "local" | "repo" | "both";
 const REPO_ONLY_CWD_SENTINEL = "/__HIVE_repo_only__";

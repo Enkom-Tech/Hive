@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Moon, Settings, Sun } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate, useParams } from "@/lib/router";
@@ -27,6 +27,7 @@ import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { healthApi } from "../api/health";
 import { queryKeys } from "../lib/queryKeys";
 import { cn } from "../lib/utils";
+import { PageSkeleton } from "./PageSkeleton";
 import { NotFoundPage } from "../pages/NotFound";
 import { Button } from "@/components/ui/button";
 
@@ -351,7 +352,9 @@ export function Layout() {
                 requestedPrefix={companyPrefix ?? selectedCompany?.issuePrefix}
               />
             ) : (
-              <Outlet />
+              <Suspense fallback={<PageSkeleton variant="list" />}>
+                <Outlet />
+              </Suspense>
             )}
           </main>
           <PropertiesPanel />

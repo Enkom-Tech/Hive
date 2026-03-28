@@ -34,4 +34,7 @@ jobs:
           cd control-plane && pnpm typecheck
       - name: Test
         run: |
-          cd control-plane && pnpm test:coverage
+          cd control-plane && pnpm test:run
+      - name: Server coverage gate
+        run: |
+          cd control-plane && pnpm test:coverage:server

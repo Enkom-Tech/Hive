@@ -19,7 +19,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { CommentThread } from "../components/CommentThread";
 import { IssueProperties } from "../components/IssueProperties";
 import { LiveRunWidget } from "../components/LiveRunWidget";
-import type { MentionOption } from "../components/MarkdownEditor";
+import type { MentionOption } from "../components/markdown-editor-types";
 import { ScrollToBottom } from "../components/ScrollToBottom";
 import { StatusIcon } from "../components/StatusIcon";
 import { PriorityIcon } from "../components/PriorityIcon";
@@ -44,8 +44,8 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import type { ActivityEvent } from "@hive/shared";
-import type { Agent, IssueAttachment } from "@hive/shared";
+import type { ActivityEvent, Agent, IssueAttachment } from "@hive/shared";
+import { ISSUE_STATUS_TODO } from "@hive/shared";
 
 type CommentReassignment = {
   assigneeAgentId: string | null;
@@ -457,7 +457,7 @@ export function IssueDetail() {
         comment: body,
         assigneeAgentId: reassignment.assigneeAgentId,
         assigneeUserId: reassignment.assigneeUserId,
-        ...(reopen ? { status: "todo" } : {}),
+        ...(reopen ? { status: ISSUE_STATUS_TODO } : {}),
       }),
     onSuccess: () => {
       invalidateIssue();

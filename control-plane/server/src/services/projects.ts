@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
-import type { Db } from "@hive/db";
+import type { Db, DbTransaction } from "@hive/db";
 import { projects, projectGoals, goals, projectWorkspaces, workspaceRuntimeServices } from "@hive/db";
 import {
   PROJECT_COLORS,
@@ -28,7 +28,7 @@ type CreateWorkspaceInput = {
 };
 type UpdateWorkspaceInput = Partial<CreateWorkspaceInput>;
 
-interface ProjectWithGoals extends Omit<ProjectRow, "executionWorkspacePolicy"> {
+export interface ProjectWithGoals extends Omit<ProjectRow, "executionWorkspacePolicy"> {
   urlKey: string;
   goalIds: string[];
   goals: ProjectGoalRef[];
@@ -292,7 +292,7 @@ export function resolveProjectNameForUniqueShortname(
 }
 
 async function ensureSinglePrimaryWorkspace(
-  dbOrTx: any,
+  dbOrTx: Db | DbTransaction,
   input: {
     companyId: string;
     projectId: string;

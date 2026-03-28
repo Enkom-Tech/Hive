@@ -203,6 +203,14 @@ export const PROJECT_STATUSES = [
 ] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
+export const PROJECT_STATUS_LABELS = {
+  backlog: "Backlog",
+  planned: "Planned",
+  in_progress: "In Progress",
+  completed: "Completed",
+  cancelled: "Cancelled",
+} as const satisfies Record<ProjectStatus, string>;
+
 export const PROJECT_COLORS = [
   "#6366f1", // indigo
   "#8b5cf6", // violet

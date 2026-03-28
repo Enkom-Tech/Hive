@@ -13,6 +13,7 @@
     "test": "pnpm exec vitest",
     "test:run": "pnpm exec vitest run",
     "test:coverage": "pnpm exec vitest run --coverage",
+    "test:coverage:server": "pnpm exec vitest run --config server/vitest.config.ts --coverage",
     "db:generate": "pnpm --filter @hive/db generate",
     "db:migrate": "pnpm --filter @hive/db migrate",
     "secrets:migrate-inline-env": "tsx scripts/migrate-inline-env-secrets.ts",

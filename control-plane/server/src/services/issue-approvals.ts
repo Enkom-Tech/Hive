@@ -4,7 +4,7 @@ import { approvals, issueApprovals, issues } from "@hive/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
 
-interface LinkActor {
+export interface LinkActor {
   agentId?: string | null;
   userId?: string | null;
 }

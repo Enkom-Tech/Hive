@@ -14,47 +14,13 @@ import { createPrincipalMiddleware } from "./middleware/auth.js";
 import { issueBoardJwt } from "./auth/board-jwt.js";
 import { getCurrentPrincipal } from "./auth/principal.js";
 import { LOCAL_BOARD_USER_ID } from "./board-claim.js";
-import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { createAuthenticatedSignUpGateMiddleware } from "./middleware/sign-up-gate.js";
-import { healthRoutes } from "./routes/health.js";
-import { instanceRoutes } from "./routes/instance.js";
-import { instanceStatusRoutes } from "./routes/instance-status.js";
-import { workloadService } from "./services/workload.js";
-import { companyRoutes } from "./routes/companies.js";
-import { agentRoutes } from "./routes/agents/index.js";
-import { projectRoutes } from "./routes/projects.js";
-import { issueRoutes } from "./routes/issues.js";
-import { goalRoutes } from "./routes/goals.js";
-import { approvalRoutes } from "./routes/approvals.js";
-import { secretRoutes } from "./routes/secrets.js";
-import { costRoutes } from "./routes/costs.js";
-import { activityRoutes } from "./routes/activity.js";
-import { dashboardRoutes } from "./routes/dashboard.js";
-import { standupRoutes } from "./routes/standup.js";
-import { workloadRoutes } from "./routes/workload.js";
-import { webhookDeliveryRoutes } from "./routes/webhook-deliveries.js";
-import { connectRoutes } from "./routes/connect.js";
-import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { llmRoutes } from "./routes/llms.js";
-import { assetRoutes } from "./routes/assets.js";
-import { accessRoutes } from "./routes/access.js";
-import { departmentRoutes } from "./routes/departments.js";
-import { createCompanyEventsSSEHandler } from "./routes/events-sse.js";
-import { releaseRoutes } from "./routes/releases.js";
-import { workerDownloadsRoutes } from "./routes/worker-downloads.js";
-import { workerApiRoutes } from "./routes/worker-api.js";
-import {
-  internalHiveOperatorRoutes,
-  internalHiveTrainingCallbackRoutes,
-} from "./routes/internal-hive.js";
-import { pluginHostRoutes } from "./routes/plugin-host.js";
-import { pluginBoardRoutes } from "./routes/plugins.js";
 import { registerGithubWebhookBeforeJson } from "./routes/integrations-github.js";
-import { e2eMcpSmokeRoutes } from "./routes/e2e-mcp-smoke.js";
+import { registerMainApiRoutes } from "./routes/register-main-api-routes.js";
 import { applyUiBranding } from "./ui-branding.js";
-import { initPlacementPrometheus, renderPlacementPrometheusScrape } from "./placement-metrics.js";
-import { workerApiMetricsMiddleware } from "./middleware/worker-api-metrics.js";
+import { initPlacementPrometheus } from "./placement-metrics.js";
 import { startPluginSupervisorRuntime } from "./services/plugin-supervisor.js";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 
@@ -274,138 +240,8 @@ export async function createApp(
   }
   app.use(llmRoutes(db));
 
-  // Mount API routes
   const api = Router();
-  api.use(boardMutationGuard());
-  api.use(
-    "/health",
-    healthRoutes(db, {
-      deploymentMode: opts.deploymentMode,
-      deploymentExposure: opts.deploymentExposure,
-      authReady: opts.authReady,
-      companyDeletionEnabled: opts.companyDeletionEnabled,
-      authDisableSignUp: opts.authDisableSignUp,
-    }),
-  );
-  if (opts.metricsEnabled) {
-    api.get("/metrics", async (_req, res) => {
-      const out = await renderPlacementPrometheusScrape();
-      if (!out) {
-        res.status(503).json({ error: "Metrics unavailable" });
-        return;
-      }
-      res.status(200).set("Content-Type", out.contentType).send(out.body);
-    });
-  }
-  api.use("/releases", releaseRoutes());
-  api.use(
-    "/worker-downloads",
-    workerDownloadsRoutes({
-      authPublicBaseUrl: opts.authPublicBaseUrl,
-      workerProvisionManifestJson: opts.workerProvisionManifestJson,
-      workerProvisionManifestFile: opts.workerProvisionManifestFile,
-      workerProvisionManifestSigningKeyPem: opts.workerProvisionManifestSigningKeyPem,
-    }),
-  );
-  api.use(
-    "/worker-api",
-    workerApiMetricsMiddleware(),
-    workerApiRoutes(db, { secretsStrictMode: opts.secretsStrictMode }),
-  );
-  api.use(
-    "/internal/hive",
-    internalHiveTrainingCallbackRoutes(db, {
-      internalOperatorSecret: opts.internalHiveOperatorSecret?.trim(),
-    }),
-  );
-  if (opts.internalHiveOperatorSecret?.trim()) {
-    api.use(
-      "/internal/hive",
-      internalHiveOperatorRoutes(db, { operatorSecret: opts.internalHiveOperatorSecret.trim() }),
-    );
-  }
-  if (opts.pluginHostSecret?.trim()) {
-    api.use(
-      "/internal/plugin-host",
-      pluginHostRoutes(db, { hostSecret: opts.pluginHostSecret.trim() }),
-    );
-  }
-  if (
-    opts.deploymentMode === "local_trusted" &&
-    opts.e2eMcpSmokeMaterializeSecret?.trim()
-  ) {
-    api.use(
-      "/e2e/mcp-smoke",
-      e2eMcpSmokeRoutes(db, {
-        materializeSecret: opts.e2eMcpSmokeMaterializeSecret.trim(),
-        serverPort: opts.serverPort,
-      }),
-    );
-  }
-  api.get(
-    "/companies/:companyId/events",
-    createCompanyEventsSSEHandler(db, {
-      deploymentMode: opts.deploymentMode,
-      resolveSession: opts.resolveSession,
-    }),
-  );
-  api.use(
-    "/companies",
-    companyRoutes(db, {
-      drainAutoEvacuateEnabled: opts.drainAutoEvacuateEnabled,
-      drainCancelInFlightPlacementsEnabled: opts.drainCancelInFlightPlacementsEnabled,
-      workerIdentityAutomationEnabled: opts.workerIdentityAutomationEnabled ?? true,
-      apiPublicBaseUrl: opts.apiPublicBaseUrl,
-      workerProvisionManifestJson: opts.workerProvisionManifestJson,
-      workerProvisionManifestFile: opts.workerProvisionManifestFile,
-      workerProvisionManifestSigningKeyPem: opts.workerProvisionManifestSigningKeyPem,
-      bifrostAdmin:
-        opts.bifrostAdminBaseUrl?.trim() && opts.bifrostAdminToken?.trim()
-          ? { baseUrl: opts.bifrostAdminBaseUrl.trim(), token: opts.bifrostAdminToken.trim() }
-          : undefined,
-      internalHiveOperatorSecret: opts.internalHiveOperatorSecret,
-    }),
-  );
-  api.use(agentRoutes(db, { strictSecretsMode: opts.secretsStrictMode }));
-  api.use(assetRoutes(db, opts.storageService));
-  api.use(projectRoutes(db));
-  api.use(issueRoutes(db, opts.storageService));
-  api.use(goalRoutes(db));
-  api.use(approvalRoutes(db, opts.secretsStrictMode));
-  api.use(secretRoutes(db, opts.secretsProvider));
-  api.use(costRoutes(db));
-  api.use(activityRoutes(db));
-  api.use(dashboardRoutes(db));
-  api.use(standupRoutes(db));
-  api.use(workloadRoutes(db));
-  api.use(webhookDeliveryRoutes(db));
-  api.use(connectRoutes(db, { authPublicBaseUrl: opts.authPublicBaseUrl }));
-  api.use(sidebarBadgeRoutes(db));
-  api.use(pluginBoardRoutes(db));
-  api.use(
-    accessRoutes(db, {
-      deploymentMode: opts.deploymentMode,
-      deploymentExposure: opts.deploymentExposure,
-      bindHost: opts.bindHost,
-      allowedHostnames: opts.allowedHostnames,
-      joinAllowedAdapterTypes: opts.joinAllowedAdapterTypes,
-    }),
-  );
-  api.use(departmentRoutes(db));
-  api.use("/instance", instanceRoutes(db, { deploymentMode: opts.deploymentMode }));
-  api.use(
-    "/instance",
-    instanceStatusRoutes(db, {
-      deploymentMode: opts.deploymentMode,
-      deploymentExposure: opts.deploymentExposure,
-      authReady: opts.authReady,
-      companyDeletionEnabled: opts.companyDeletionEnabled,
-      authDisableSignUp: opts.authDisableSignUp,
-      activeDatabaseConnectionString: opts.activeDatabaseConnectionString,
-      metricsEnabled: opts.metricsEnabled,
-      workload: workloadService(db),
-    }),
-  );
+  registerMainApiRoutes(api, db, opts.storageService, opts);
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });

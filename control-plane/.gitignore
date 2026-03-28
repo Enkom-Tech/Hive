@@ -5,6 +5,7 @@ dist/
 drizzle/meta/
 .vite/
 coverage/
+coverage-server/
 .DS_Store
 data/
 .hive/

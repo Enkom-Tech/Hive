@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Project } from "@hive/shared";
+import type { Project, ProjectStatus } from "@hive/shared";
+import { PROJECT_STATUSES, PROJECT_STATUS_LABELS } from "@hive/shared";
 import { StatusBadge } from "./StatusBadge";
 import { cn, formatDate } from "../lib/utils";
 import { goalsApi } from "../api/goals";
@@ -18,13 +19,10 @@ import { ChoosePathButton } from "./PathInstructionsModal";
 import { DraftInput } from "./agent-config-primitives";
 import { InlineEditor } from "./InlineEditor";
 
-const PROJECT_STATUSES = [
-  { value: "backlog", label: "Backlog" },
-  { value: "planned", label: "Planned" },
-  { value: "in_progress", label: "In Progress" },
-  { value: "completed", label: "Completed" },
-  { value: "cancelled", label: "Cancelled" },
-];
+const PROJECT_STATUS_OPTIONS = PROJECT_STATUSES.map((value: ProjectStatus) => ({
+  value,
+  label: PROJECT_STATUS_LABELS[value],
+}));
 
 // TODO(issue-worktree-support): re-enable this UI once the workflow is ready to ship.
 const SHOW_EXPERIMENTAL_ISSUE_WORKTREE_UI = true;
@@ -133,7 +131,7 @@ function ProjectStatusPicker({ status, onChange }: { status: string; onChange: (
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-40 p-1" align="start">
-        {PROJECT_STATUSES.map((s) => (
+        {PROJECT_STATUS_OPTIONS.map((s) => (
           <Button
             key={s.value}
             variant="ghost"

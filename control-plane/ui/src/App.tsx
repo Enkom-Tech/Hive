@@ -6,31 +6,33 @@ import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { authApi } from "./api/auth";
 import { healthApi } from "./api/health";
-import { Dashboard } from "./pages/Dashboard";
-import { Companies } from "./pages/Companies";
-import { Agents } from "./pages/Agents";
-import { AgentDetail } from "./pages/AgentDetail";
-import { Projects } from "./pages/Projects";
-import { ProjectDetail } from "./pages/ProjectDetail";
-import { Issues } from "./pages/Issues";
-import { IssueDetail } from "./pages/IssueDetail";
-import { Goals } from "./pages/Goals";
-import { GoalDetail } from "./pages/GoalDetail";
-import { Approvals } from "./pages/Approvals";
-import { ApprovalDetail } from "./pages/ApprovalDetail";
-import { Costs } from "./pages/Costs";
-import { Activity } from "./pages/Activity";
-import { Standup } from "./pages/Standup";
-import { Inbox } from "./pages/Inbox";
-import { CompanySettings } from "./pages/CompanySettings";
-import { Departments } from "./pages/Departments";
-import { Workers } from "./pages/Workers";
-import { DesignGuide } from "./pages/DesignGuide";
-import { InstanceSettings } from "./pages/InstanceSettings";
-import { InstanceStatus } from "./pages/InstanceStatus";
-import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
-import { OrgChart } from "./pages/OrgChart";
-import { NewAgent } from "./pages/NewAgent";
+import {
+  Activity,
+  AgentDetail,
+  Agents,
+  ApprovalDetail,
+  Approvals,
+  Companies,
+  CompanySettings,
+  Costs,
+  Dashboard,
+  Departments,
+  DesignGuide,
+  GoalDetail,
+  Goals,
+  Inbox,
+  InstanceSettings,
+  InstanceStatus,
+  IssueDetail,
+  Issues,
+  NewAgent,
+  OrgChart,
+  ProjectDetail,
+  Projects,
+  RunTranscriptUxLab,
+  Standup,
+  Workers,
+} from "./pages/lazyPages";
 import { AuthPage } from "./pages/Auth";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { InviteLandingPage } from "./pages/InviteLanding";

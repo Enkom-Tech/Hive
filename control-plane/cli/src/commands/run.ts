@@ -15,6 +15,11 @@ import {
   resolveHiveHomeDir,
   resolveHiveInstanceId,
 } from "../config/home.js";
+import {
+  resolvePublishedServerMain,
+  startServerSubprocess,
+  waitForSubprocessExit,
+} from "../lib/start-server-subprocess.js";
 
 interface RunOptions {
   config?: string;
@@ -28,6 +33,40 @@ interface StartedServer {
   databaseUrl: string;
   host: string;
   listenPort: number;
+}
+
+function resolveCliPostgresUrl(config: HiveConfig): string | undefined {
+  if (config.database.mode === "postgres" && config.database.connectionString?.trim()) {
+    return config.database.connectionString.trim();
+  }
+  return process.env.DATABASE_URL?.trim();
+}
+
+function resolveCliServerSubprocessMode(
+  config: HiveConfig,
+  publishedMain: string | null,
+): { useSubprocess: boolean; reason: "env" | "auto" | null } {
+  const raw = process.env.HIVE_CLI_SERVER_SUBPROCESS?.trim().toLowerCase();
+  if (raw === "0" || raw === "false") {
+    return { useSubprocess: false, reason: null };
+  }
+  if (raw === "1" || raw === "true") {
+    return { useSubprocess: true, reason: "env" };
+  }
+
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const devEntry = path.resolve(projectRoot, "server/src/index.ts");
+  if (fs.existsSync(devEntry)) {
+    return { useSubprocess: false, reason: null };
+  }
+  if (!publishedMain) {
+    return { useSubprocess: false, reason: null };
+  }
+  const dbUrl = resolveCliPostgresUrl(config);
+  if (!dbUrl) {
+    return { useSubprocess: false, reason: null };
+  }
+  return { useSubprocess: true, reason: "auto" };
 }
 
 export async function runCommand(opts: RunOptions): Promise<void> {
@@ -79,6 +118,43 @@ export async function runCommand(opts: RunOptions): Promise<void> {
   }
 
   p.log.step("Starting Hive server...");
+
+  const publishedMain = resolvePublishedServerMain();
+  const subprocessDecision = resolveCliServerSubprocessMode(config, publishedMain);
+
+  if (subprocessDecision.useSubprocess) {
+    if (!publishedMain) {
+      throw new Error(
+        "Subprocess mode requires a built @hive/server (dist/index.js). Build the server package or set HIVE_CLI_SERVER_SUBPROCESS=0 to use the in-process server.",
+      );
+    }
+    if (subprocessDecision.reason === "auto") {
+      p.log.message(
+        pc.dim(
+          "Starting packaged server in a subprocess (Postgres + dist/index.js detected). HIVE_CLI_SERVER_SUBPROCESS=0 forces in-process.",
+        ),
+      );
+    }
+    const { started, child } = await startServerSubprocess(publishedMain, config);
+    const startedServer: StartedServer = {
+      apiUrl: started.apiUrl,
+      databaseUrl: started.databaseUrl,
+      host: started.host,
+      listenPort: started.listenPort,
+    };
+    if (shouldGenerateBootstrapInviteAfterStart(config)) {
+      p.log.step("Generating bootstrap CEO invite");
+      await bootstrapCeoInvite({
+        config: configPath,
+        dbUrl: startedServer.databaseUrl,
+        baseUrl: resolveBootstrapInviteBaseUrl(config, startedServer),
+      });
+    }
+    p.outro(pc.green("Hive server is running in a subprocess. Press Ctrl+C to stop."));
+    await waitForSubprocessExit(child);
+    return;
+  }
+
   const startedServer = await importServerEntry();
 
   if (shouldGenerateBootstrapInviteAfterStart(config)) {
