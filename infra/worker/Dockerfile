@@ -1,6 +1,6 @@
 FROM golang:1.26.1-alpine AS builder
 WORKDIR /workspace
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 go build -o hive-worker ./cmd/worker
