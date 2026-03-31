@@ -302,7 +302,7 @@ describe("realizeExecutionWorkspace", () => {
     ).rejects.toThrow(/provision command.*failed/);
 
     const worktreesDir = path.join(repoRoot, ".hive", "worktrees");
-    const worktreePath = path.join(worktreesDir, "z-3-failing-provision");
+    const worktreePath = path.join(worktreesDir, "Z-3-branch");
     await expect(fs.stat(worktreePath)).resolves.toBeTruthy();
   });
 });

@@ -12,7 +12,7 @@ describe("logger request redaction", () => {
 
     // Import logger after env var is set (logger module resolves log dir at module init time).
     vi.resetModules();
-    const { httpLogger } = await import("../middleware/logger.js");
+    const { httpLogger, logger } = await import("../middleware/logger.js");
 
     const app = express();
     app.use(express.json());
@@ -34,8 +34,9 @@ describe("logger request redaction", () => {
       })
       .expect(400);
 
-    // Let pino flush any remaining writes.
-    await new Promise<void>((r) => setImmediate(() => r()));
+    await new Promise<void>((resolve) => {
+      logger.flush(() => resolve());
+    });
 
     const logFile = path.join(tmpLogDir, "server.log");
     // pino transport may create/write the file slightly after request completion.

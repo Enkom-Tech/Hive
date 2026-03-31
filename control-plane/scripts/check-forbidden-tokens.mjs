@@ -21,6 +21,11 @@ function uniqueNonEmpty(values) {
   return Array.from(new Set(values.map((value) => value?.trim() ?? "").filter(Boolean)));
 }
 
+/** OS usernames that match common substrings in product code (false positives with `git grep -i`). */
+const DYNAMIC_USERNAME_BLOCKLIST = new Set(
+  ["runner", "gitlab-runner", "ubuntu", "circleci", "buildkite", "jenkins"].map((s) => s.toLowerCase()),
+);
+
 export function resolveDynamicForbiddenTokens(env = process.env, osModule = os) {
   const candidates = [env.USER, env.LOGNAME, env.USERNAME];
 
@@ -30,7 +35,7 @@ export function resolveDynamicForbiddenTokens(env = process.env, osModule = os) 
     // Some environments do not expose userInfo; env vars are enough fallback.
   }
 
-  return uniqueNonEmpty(candidates);
+  return uniqueNonEmpty(candidates).filter((token) => !DYNAMIC_USERNAME_BLOCKLIST.has(token.toLowerCase()));
 }
 
 export function readForbiddenTokensFile(tokensFile) {

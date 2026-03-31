@@ -69,7 +69,7 @@ describe("heartbeat execution workspace integration", () => {
       expect(workspace.created).toBe(true);
       expect(workspace.cwd).toContain(path.join(".hive", "worktrees"));
       expect(workspace.cwd).toContain(repoRoot);
-      expect(workspace.branchName).toBe("hb-1-heartbeat-worktree-test");
+      expect(workspace.branchName).toBe("HB-1-heartbeat-worktree-test");
       expect(workspace.worktreePath).toBe(workspace.cwd);
 
       const hiveWorkspaceShape = {
@@ -87,7 +87,7 @@ describe("heartbeat execution workspace integration", () => {
         source: "project_primary",
         strategy: "git_worktree",
         projectId: "project-1",
-        branchName: "hb-1-heartbeat-worktree-test",
+        branchName: "HB-1-heartbeat-worktree-test",
       });
 
       const commentBody = buildWorkspaceReadyComment({ workspace, runtimeServices: [] });
