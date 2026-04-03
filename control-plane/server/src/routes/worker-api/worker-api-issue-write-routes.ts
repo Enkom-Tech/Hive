@@ -321,10 +321,12 @@ export function registerWorkerApiIssueWriteRoutes(router: Router, ctx: WorkerApi
         const movedToClosed =
           (ISSUE_STATUSES_CLOSED as readonly string[]).includes(issue.status) &&
           !(ISSUE_STATUSES_CLOSED as readonly string[]).includes(existing.status);
-        const closedTerminal =
-          issue.status === ISSUE_STATUS_DONE || issue.status === ISSUE_STATUS_CANCELLED
-            ? issue.status
-            : null;
+        const closedTerminal: "done" | "cancelled" | null =
+          issue.status === ISSUE_STATUS_DONE
+            ? "done"
+            : issue.status === ISSUE_STATUS_CANCELLED
+              ? "cancelled"
+              : null;
         if (movedToClosed && existing.executionRunId && closedTerminal) {
           void heartbeat
             .finishRunForIssueClosure(existing.executionRunId, closedTerminal)
