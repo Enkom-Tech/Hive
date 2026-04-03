@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import detectPort from "detect-port";
 import type { Request as ExpressRequest, RequestHandler } from "express";
 import { createApp } from "./app.js";
+import { createFastifyApp } from "./fastify-app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
@@ -80,7 +81,7 @@ export async function startServer(): Promise<StartedServer> {
   const listenPort = await detectPort(config.port);
   const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
   const storageService = createStorageServiceFromConfig(config);
-  const app = await createApp(db, {
+  const appOpts = {
     uiMode,
     serverPort: listenPort,
     storageService,
@@ -123,8 +124,22 @@ export async function startServer(): Promise<StartedServer> {
     resolveSession,
     principalResolver,
     activeDatabaseConnectionString,
-  });
-  const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
+  } as const;
+
+  const useFastify = process.env.HIVE_USE_FASTIFY === "true";
+
+  let server: ReturnType<typeof createServer>;
+  if (useFastify) {
+    const fastifyApp = await createFastifyApp(db, {
+      ...appOpts,
+      resolveSession: resolveSessionFromHeaders,
+    });
+    await fastifyApp.ready();
+    server = fastifyApp.server;
+  } else {
+    const app = await createApp(db, appOpts);
+    server = createServer(app as unknown as Parameters<typeof createServer>[0]);
+  }
 
   if (listenPort !== config.port) {
     logger.warn(`Requested port is busy; using next free port (requestedPort=${config.port}, selectedPort=${listenPort})`);
