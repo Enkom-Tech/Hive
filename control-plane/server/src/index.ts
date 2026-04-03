@@ -1,4 +1,5 @@
 /// <reference path="./types/express.d.ts" />
+/// <reference path="./types/fastify.d.ts" />
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -74,6 +75,7 @@ export async function startServer(): Promise<StartedServer> {
   const authBootstrap = await bootstrapAuth(config, db);
   authReady = authBootstrap.authReady;
   betterAuthHandler = authBootstrap.betterAuthHandler;
+  const betterAuthInstance = authBootstrap.betterAuthInstance;
   resolveSession = authBootstrap.resolveSession;
   resolveSessionFromHeaders = authBootstrap.resolveSessionFromHeaders;
   principalResolver = authBootstrap.principalResolver;
@@ -132,6 +134,7 @@ export async function startServer(): Promise<StartedServer> {
   if (useFastify) {
     const fastifyApp = await createFastifyApp(db, {
       ...appOpts,
+      betterAuthInstance,
       resolveSession: resolveSessionFromHeaders,
     });
     await fastifyApp.ready();

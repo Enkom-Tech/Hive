@@ -78,6 +78,8 @@ async function ensureLocalTrustedBoardPrincipal(db: Db): Promise<void> {
 export interface BootstrapAuthResult {
   authReady: boolean;
   betterAuthHandler: RequestHandler | undefined;
+  /** Raw Better Auth instance (for Fastify integration which handles the handler itself). */
+  betterAuthInstance: unknown;
   resolveSession: ((req: Request) => Promise<BetterAuthSessionResult | null>) | undefined;
   resolveSessionFromHeaders:
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
@@ -113,6 +115,7 @@ export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAu
 
   let authReady = config.deploymentMode === "local_trusted";
   let betterAuthHandler: RequestHandler | undefined;
+  let betterAuthInstance: unknown;
   let resolveSession:
     | ((req: Request) => Promise<BetterAuthSessionResult | null>)
     | undefined;
@@ -150,6 +153,7 @@ export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAu
     );
 
     const auth = createBetterAuthInstance(db, config, effectiveTrustedOrigins);
+    betterAuthInstance = auth;
     betterAuthHandler = createBetterAuthHandler(auth);
     resolveSession = (req) => resolveBetterAuthSession(auth, req);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
@@ -172,6 +176,7 @@ export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAu
   return {
     authReady,
     betterAuthHandler,
+    betterAuthInstance,
     resolveSession,
     resolveSessionFromHeaders,
     principalResolver,
