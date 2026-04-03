@@ -16,7 +16,7 @@ import { readIssueDetailBreadcrumb } from "../lib/issueDetailBreadcrumb";
 import { useProjectOrder } from "./useProjectOrder";
 import { IssueProperties } from "../components/IssueProperties";
 import type { MentionOption } from "../components/markdown-editor-types";
-import { ISSUE_STATUS_TODO } from "@hive/shared";
+import { ISSUE_STATUS_QUALITY_REVIEW, ISSUE_STATUS_TODO } from "@hive/shared";
 import type { Agent } from "@hive/shared";
 import {
   buildCommentsWithRunMeta,
@@ -71,7 +71,7 @@ export function useIssueDetailPage() {
   const { data: qualityReviewApproval } = useQuery({
     queryKey: queryKeys.issues.qualityReview(issueId!),
     queryFn: () => issuesApi.getQualityReview(issueId!),
-    enabled: !!issueId && issue?.status === "quality_review",
+    enabled: !!issueId && issue?.status === ISSUE_STATUS_QUALITY_REVIEW,
   });
 
   const { data: attachments } = useQuery({

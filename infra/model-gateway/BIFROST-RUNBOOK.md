@@ -59,7 +59,7 @@ Companion to [`BIFROST-INTEGRATION.md`](BIFROST-INTEGRATION.md) and [ADR 006](..
 
 ## Metering plugin (`hive_metering`)
 
-- Source: [`../bifrost-hive-metering`](../bifrost-hive-metering). Build on **Linux** with the same Go version as Bifrost from that module: `go build -buildmode=plugin -o hive_metering.so ./plugin`
+- Source: [`../bifrost-hive-metering`](../bifrost-hive-metering). Build on **Linux** with the same Go version as Bifrost: `make -C ../bifrost-hive-metering plugin` or `CGO_ENABLED=1 go build -buildmode=plugin -o hive_metering.so ./plugin` from that directory.
 - Plugin JSON config must include **`control_plane_base_url`** (board API origin) and **`operator_bearer`** (same secret as **`HIVE_INTERNAL_OPERATOR_SECRET`** on the server).
 - Register the `.so` in Bifrost **`config.json`** plugins list per upstream docs.
 
@@ -69,9 +69,9 @@ Document which Hive metering approach each environment uses (see options in [`BI
 
 | Environment | Option | Notes |
 |---------------|--------|--------|
-| **Dev** | 1 plugin / 2 ETL / 3 gap accepted | |
-| **Staging** | 1 plugin / 2 ETL / 3 gap accepted | |
-| **Prod** | 1 plugin / 2 ETL / 3 gap accepted | |
+| **Dev** | 3 (default) | Accept incomplete Hive rows for Bifrost-routed traffic until plugin or ETL is wired; fine for local experimentation. |
+| **Staging** | 1 (target) | Build and load **`hive_metering.so`** from [`../bifrost-hive-metering`](../bifrost-hive-metering); validate VK hash → company mapping and POST metering. |
+| **Prod** | 1 (target) | Same as staging; do not rely on Option 3 once spend or budgets depend on gateway traffic. |
 
 - **Option 1** — Bifrost **`hive_metering`** plugin posts aggregates to the control plane (recommended when Hive Postgres is authoritative).
 - **Option 2** — ETL from Bifrost logs/metrics into Hive on a schedule.

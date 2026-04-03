@@ -1,6 +1,7 @@
 import type { Db } from "@hive/db";
 import { agents } from "@hive/db";
 import { logger } from "../../middleware/logger.js";
+import { loadConfig } from "../../config.js";
 import { getRunLogStore } from "../run-log-store.js";
 import { publishLiveEvent } from "../live-events.js";
 import { getServerAdapter } from "../../adapters/index.js";
@@ -25,6 +26,7 @@ export type { ResolvedWorkspaceForRun } from "./types.js";
 export { resolveRuntimeSessionParamsForWorkspace, shouldResetTaskSessionForWake, isExternalRun } from "./types.js";
 
 export function heartbeatService(db: Db) {
+  const { workspaceRemoteExecGuard } = loadConfig();
   const runLogStore = getRunLogStore();
   const issuesSvc = issueService(db);
   const secretsSvc = secretService(db);
@@ -95,6 +97,7 @@ export function heartbeatService(db: Db) {
     issueService: issuesSvc,
     secretService: secretsSvc,
     publishLiveEvent: publishLiveEvent as (event: { companyId: string; type: string; payload: Record<string, unknown> }) => void,
+    workspaceRemoteExecGuard,
   });
 
   executeRun = createHeartbeatExecuteRun({ db, runLifecycle, adapterExec, costApp });

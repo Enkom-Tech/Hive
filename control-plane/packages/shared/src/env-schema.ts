@@ -174,6 +174,27 @@ export const ENV_VAR_DOCS: Record<string, EnvVarDoc> = {
     description:
       "HS256 secret for drone worker-instance JWT (`/api/worker-api/*`, WebSocket worker_api_token); omit to disable",
   },
+  HIVE_WORKER_POLICY_SECRET: {
+    description:
+      "Shared symmetric secret: worker verifies HMAC on WebSocket worker_container_policy; control plane uses the same value to sign when HIVE_WORKER_CONTAINER_POLICY_ALLOWLIST_CSV is set. Must match the worker's HIVE_WORKER_POLICY_SECRET.",
+  },
+  HIVE_WORKER_CONTAINER_POLICY_ALLOWLIST_CSV: {
+    description:
+      "Comma-separated container image registry prefixes pushed to drones as signed worker_container_policy after link hello (requires HIVE_WORKER_POLICY_SECRET on control plane and worker). Example: ghcr.io/my-org/,registry.example.com/proj/",
+  },
+  HIVE_WORKER_CONTAINER_POLICY_VERSION: {
+    description: "Policy document version string included in the HMAC payload (default 1)",
+    default: "1",
+  },
+  HIVE_WORKER_CONTAINER_POLICY_EXPIRES_AT: {
+    description:
+      "Optional ISO-8601 expiry (e.g. 2099-12-31T23:59:59Z) included in signature; empty string if omitted",
+  },
+  HIVE_WORKSPACE_REMOTE_EXEC_GUARD: {
+    description:
+      "When true, heartbeat runs that use a control-plane-local git worktree (isolated execution workspace) fail fast instead of sending paths a remote drone cannot access. See docs/deploy/execution-workspace-remote-workers.md",
+    default: "false",
+  },
   HIVE_WORKER_JWT_TTL_SECONDS: { description: "Worker JWT TTL in seconds (default 86400)" },
   HIVE_WORKER_JWT_ISSUER: { description: "Worker JWT issuer claim" },
   HIVE_WORKER_JWT_AUDIENCE: { description: "Worker JWT audience claim" },
@@ -314,6 +335,11 @@ export const PARSED_ENV_KEYS = [
   "HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY_FILE",
   "HIVE_WORKER_PROVISION_MANIFEST_SIGNING_KEY",
   "HIVE_WORKER_JWT_SECRET",
+  "HIVE_WORKER_POLICY_SECRET",
+  "HIVE_WORKER_CONTAINER_POLICY_ALLOWLIST_CSV",
+  "HIVE_WORKER_CONTAINER_POLICY_VERSION",
+  "HIVE_WORKER_CONTAINER_POLICY_EXPIRES_AT",
+  "HIVE_WORKSPACE_REMOTE_EXEC_GUARD",
   "HIVE_WORKER_JWT_TTL_SECONDS",
   "HIVE_WORKER_JWT_ISSUER",
   "HIVE_WORKER_JWT_AUDIENCE",

@@ -4,6 +4,7 @@ export type { LinkAuth, HeartbeatWorkerLink, MintInstanceLinkToken, WorkerLinkAt
 
 export { attachWorkerLinkUpgrade } from "./worker-link-upgrade.js";
 export {
+  deliverJsonToWorkerInstance,
   sendRunToWorker,
   sendCancelToWorker,
   sendDeployGrantToWorker,

@@ -53,6 +53,7 @@ export async function bootstrapRuntime(
   const instanceLinkTtlSeconds = 90 * 24 * 3600;
   attachWorkerLinkUpgrade(server, {
     db: db as any,
+    workerContainerPolicyBroadcast: config.workerContainerPolicyBroadcast,
     heartbeat: {
       appendWorkerRunLog: heartbeat.appendWorkerRunLog.bind(heartbeat),
       handleWorkerRunStatus: heartbeat.handleWorkerRunStatus.bind(heartbeat),

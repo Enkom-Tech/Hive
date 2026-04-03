@@ -1,4 +1,5 @@
 import type { Db } from "@hive/db";
+import type { WorkerContainerPolicyBroadcastConfig } from "./worker-container-policy.js";
 
 export type LinkAuth =
   | { kind: "agent"; agentId: string; companyId: string }
@@ -36,4 +37,6 @@ export type WorkerLinkAttachOpts = {
     identityAgentsCreated?: number;
     identityErrors?: string[];
   }>;
+  /** When secret + allowlist are set, signed worker_container_policy is sent after hello alongside worker_api_token. */
+  workerContainerPolicyBroadcast?: WorkerContainerPolicyBroadcastConfig;
 };

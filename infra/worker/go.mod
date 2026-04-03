@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/tetratelabs/wazero v1.9.0
+	golang.org/x/sys v0.34.0
 )
 
 require (

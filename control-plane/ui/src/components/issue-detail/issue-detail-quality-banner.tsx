@@ -1,5 +1,6 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 import type { Approval } from "@hive/shared";
+import { ISSUE_STATUS_DONE } from "@hive/shared";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "../StatusBadge";
 import { relativeTime } from "../../lib/utils";
@@ -31,7 +32,7 @@ export function IssueDetailQualityBanner({
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => updateIssue.mutate({ status: "done" })}
+            onClick={() => updateIssue.mutate({ status: ISSUE_STATUS_DONE })}
             disabled={updateIssue.isPending}
           >
             Mark done

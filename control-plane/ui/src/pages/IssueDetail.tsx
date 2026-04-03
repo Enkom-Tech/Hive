@@ -13,6 +13,7 @@ import { IssueDetailHeader } from "../components/issue-detail/issue-detail-heade
 import { IssueDetailAttachmentsSection } from "../components/issue-detail/issue-detail-attachments-section";
 import { IssueDetailMainTabs } from "../components/issue-detail/issue-detail-main-tabs";
 import { IssueDetailLinkedCollapses } from "../components/issue-detail/issue-detail-linked-collapses";
+import { ISSUE_STATUS_QUALITY_REVIEW } from "@hive/shared";
 
 export function IssueDetail() {
   const { panelVisible, setPanelVisible } = usePanel();
@@ -91,7 +92,7 @@ export function IssueDetail() {
         </div>
       )}
 
-      {issue.status === "quality_review" && (
+      {issue.status === ISSUE_STATUS_QUALITY_REVIEW && (
         <IssueDetailQualityBanner
           qualityReviewApproval={qualityReviewApproval}
           updateIssue={updateIssue}

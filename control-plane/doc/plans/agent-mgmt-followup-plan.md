@@ -1,8 +1,18 @@
 # Agent Management Follow-up Plan (CEO Patch + Config Rollback + Issue↔Approval Linking)
 
-Status: Proposed  
+Status: **Partially superseded (2026-04-03)** — Several §2 items are implemented in tree; see **§1.5** below. Remaining: skill/comment quality guidance (§2.3).
+
 Date: 2026-02-19  
 Context: Follow-up from run `faeab00e-7857-4acc-b2b2-86f6d078adb4`
+
+## 1.5 Implementation status (as of 2026-04-03)
+
+| Item | Status |
+|------|--------|
+| CEO / privileged agent PATCH other agents (`assertCanUpdateAgent`) | **Done** — [`server/src/routes/agents/common.ts`](../../server/src/routes/agents/common.ts) |
+| Config revision log + rollback API | **Done** — `agent_config_revisions`, `POST /api/agents/:id/config-revisions/:revisionId/rollback` |
+| Issue↔approval linkage | **Done** — `issue_approvals` + [`issue-approvals.ts`](../../server/src/services/issue-approvals.ts) |
+| Markdown/links in Hive skills for comments | **Open** — still apply §2.3 if desired |
 
 ## 1. Investigation Findings
 

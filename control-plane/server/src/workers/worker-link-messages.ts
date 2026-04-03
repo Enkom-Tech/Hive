@@ -19,7 +19,11 @@ import {
   upsertWorkerInstanceFromHello,
 } from "./worker-hello.js";
 import type { LinkAuth, WorkerLinkAttachOpts } from "./worker-link-types.js";
-import { sendInstanceLinkTokenRefresh, sendWorkerApiToken } from "./worker-link-internal.js";
+import {
+  sendInstanceLinkTokenRefresh,
+  sendWorkerApiToken,
+  sendWorkerContainerPolicyIfConfigured,
+} from "./worker-link-internal.js";
 
 export function attachWorkerLinkMessageHandler(
   ws: WebSocket,
@@ -112,6 +116,12 @@ export function attachWorkerLinkMessageHandler(
             connectionId,
           );
           await sendWorkerApiToken(ws, auth.companyId, instanceRowId, connectionId);
+          sendWorkerContainerPolicyIfConfigured(
+            instanceRowId,
+            ws,
+            connectionId,
+            opts.workerContainerPolicyBroadcast,
+          );
           publishLiveEvent({
             companyId: auth.companyId,
             type: "worker.drone.registered",

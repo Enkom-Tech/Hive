@@ -27,6 +27,7 @@ import {
   resolveHiveInstanceRoot,
 } from "./home-paths.js";
 import { loadProvisionManifestSigningKeyPemFromEnv } from "./services/worker-manifest-signature.js";
+import type { WorkerContainerPolicyBroadcastConfig } from "./workers/worker-container-policy.js";
 
 const HIVE_ENV_FILE_PATH = resolveHiveEnvPath();
 if (existsSync(HIVE_ENV_FILE_PATH)) {
@@ -137,6 +138,10 @@ export interface Config {
    * When a worker instance is marked draining, cancel queued/running runs still placed on that instance (default true).
    */
   drainCancelInFlightPlacementsEnabled: boolean;
+  /** Signed WebSocket worker_container_policy broadcast after worker hello when secret + allowlist env are set. */
+  workerContainerPolicyBroadcast: WorkerContainerPolicyBroadcastConfig | undefined;
+  /** When true, fail heartbeat runs that use CP-local git worktrees (remote drone cannot see paths). */
+  workspaceRemoteExecGuard: boolean;
 }
 
 /** Read from parsed env: HIVE_* key (pass suffix, e.g. "SECRETS_STRICT_MODE"). */
@@ -347,6 +352,22 @@ export function loadConfig(): Config {
   const bifrostAdminBaseUrl = e(parsed, "BIFROST_ADMIN_BASE_URL")?.trim() || undefined;
   const bifrostAdminToken = e(parsed, "BIFROST_ADMIN_TOKEN")?.trim() || undefined;
 
+  const workerPolicySecret = parsed.HIVE_WORKER_POLICY_SECRET?.trim() ?? "";
+  const workerContainerPolicyAllowlistCsv = parsed.HIVE_WORKER_CONTAINER_POLICY_ALLOWLIST_CSV?.trim() ?? "";
+  const workerContainerPolicyVersion = parsed.HIVE_WORKER_CONTAINER_POLICY_VERSION?.trim() || "1";
+  const workerContainerPolicyExpiresAt = parsed.HIVE_WORKER_CONTAINER_POLICY_EXPIRES_AT?.trim() ?? "";
+  const workerContainerPolicyBroadcast: WorkerContainerPolicyBroadcastConfig | undefined =
+    workerPolicySecret && workerContainerPolicyAllowlistCsv
+      ? {
+          secret: workerPolicySecret,
+          allowlistCsv: workerContainerPolicyAllowlistCsv,
+          version: workerContainerPolicyVersion,
+          expiresAt: workerContainerPolicyExpiresAt,
+        }
+      : undefined;
+
+  const workspaceRemoteExecGuard = parsed.HIVE_WORKSPACE_REMOTE_EXEC_GUARD === "true";
+
   const config: Config = {
     deploymentMode,
     deploymentExposure,
@@ -424,6 +445,8 @@ export function loadConfig(): Config {
     e2eMcpSmokeMaterializeSecret,
     bifrostAdminBaseUrl,
     bifrostAdminToken,
+    workerContainerPolicyBroadcast,
+    workspaceRemoteExecGuard,
     authSecret: undefined,
     authProvider,
     trustedOriginsExtra: (parsed.BETTER_AUTH_TRUSTED_ORIGINS ?? "")

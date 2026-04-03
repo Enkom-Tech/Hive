@@ -13,6 +13,7 @@ Use this matrix when cutting control-plane + `hive-worker` releases that touch p
 | `HIVE_VCS_GITHUB_WEBHOOK_ENABLED` + `HIVE_VCS_GITHUB_WEBHOOK_SECRET` | Deliver synthetic `pull_request` closed merged | Optional `HIVE_VCS_GITHUB_ALLOWED_REPOS` |
 | Worker `HIVE_WORKSPACE_MATERIALIZE_ENABLED` + token | Clone smoke against test repo | Never log token |
 | Worker `HIVE_WORKSPACE_ARTIFACT_FETCH_ENABLED` | Tarball fetch + sha256 | Cap size in runbook |
-| Worker `HIVE_WORKER_POLICY_SECRET` | Send signed `worker_container_policy` over WS | Same secret as CP signer |
+| Worker `HIVE_WORKER_POLICY_SECRET` + CP **`HIVE_WORKER_CONTAINER_POLICY_ALLOWLIST_CSV`** (same secret on API) | CP auto-sends signed `worker_container_policy` after link hello; worker verifies | Rotate together; optional CP `HIVE_WORKER_CONTAINER_POLICY_VERSION` / `_EXPIRES_AT` |
+| **`HIVE_WORKSPACE_REMOTE_EXEC_GUARD`** (CP) | Fail git-worktree runs when remote drones cannot see CP-local paths | Enable when using remote worker pool + isolated workspaces |
 
 Rollback: revert to prior **paired** API + worker images; DB migrations are forward-only.

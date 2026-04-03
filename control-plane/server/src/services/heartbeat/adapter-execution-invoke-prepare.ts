@@ -137,6 +137,15 @@ export async function prepareAdapterInvocationPhase(
     issue: issueRef,
     agent: { id: agent.id, name: agent.name, companyId: agent.companyId },
   });
+  if (
+    deps.workspaceRemoteExecGuard &&
+    executionWorkspace.strategy === "git_worktree" &&
+    executionWorkspace.worktreePath
+  ) {
+    throw new Error(
+      "HIVE_WORKSPACE_REMOTE_EXEC_GUARD: this run uses a git worktree path that exists on the control-plane host; a remote managed worker cannot access it. Colocate the worker with the repo, use worker-side materialization or artifacts, or turn the guard off only when all drones share that filesystem. See control-plane/docs/deploy/execution-workspace-remote-workers.md",
+    );
+  }
   if (issueId && executionWorkspace.branchName) {
     await db
       .update(issues)

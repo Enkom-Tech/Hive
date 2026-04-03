@@ -3,6 +3,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { workerApiIdempotency } from "@hive/db";
 import {
   ISSUE_STATUS_BACKLOG,
+  ISSUE_STATUS_CANCELLED,
+  ISSUE_STATUS_DONE,
   ISSUE_STATUS_IN_PROGRESS,
   ISSUE_STATUSES_CLOSED,
 } from "@hive/shared";
@@ -320,7 +322,9 @@ export function registerWorkerApiIssueWriteRoutes(router: Router, ctx: WorkerApi
           (ISSUE_STATUSES_CLOSED as readonly string[]).includes(issue.status) &&
           !(ISSUE_STATUSES_CLOSED as readonly string[]).includes(existing.status);
         const closedTerminal =
-          issue.status === "done" || issue.status === "cancelled" ? issue.status : null;
+          issue.status === ISSUE_STATUS_DONE || issue.status === ISSUE_STATUS_CANCELLED
+            ? issue.status
+            : null;
         if (movedToClosed && existing.executionRunId && closedTerminal) {
           void heartbeat
             .finishRunForIssueClosure(existing.executionRunId, closedTerminal)

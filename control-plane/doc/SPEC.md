@@ -435,6 +435,8 @@ Each is a distinct page/route:
 
 **Full loop with one adapter.** The implementation must demonstrate the complete Hive cycle end-to-end, even if narrow.
 
+**Authoritative build contract:** The checklist below is long-horizon product framing and may lag the monorepo. For what engineering ships and tests against, use **[SPEC-implementation.md](SPEC-implementation.md)** (and `AGENTS.md`). Treat unchecked items here as roadmap signal, not a live completion matrix.
+
 ### Must Have
 
 - [ ] **Company CRUD** — create a Company with Initiatives

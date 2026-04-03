@@ -19,6 +19,7 @@ import {
   rejectUpgrade,
   sendInstanceLinkTokenRefresh,
   sendWorkerApiToken,
+  sendWorkerContainerPolicyIfConfigured,
 } from "./worker-link-internal.js";
 import { resolveWorkerLinkUpgradeAuth } from "./worker-link-upgrade-auth.js";
 import { attachWorkerLinkMessageHandler } from "./worker-link-messages.js";
@@ -92,6 +93,12 @@ export function attachWorkerLinkUpgrade(
         connectionId,
       );
       void sendWorkerApiToken(ws, auth.companyId, auth.workerInstanceRowId, connectionId);
+      sendWorkerContainerPolicyIfConfigured(
+        auth.workerInstanceRowId,
+        ws,
+        connectionId,
+        opts.workerContainerPolicyBroadcast,
+      );
       publishLiveEvent({
         companyId: auth.companyId,
         type: "worker.link.connected",

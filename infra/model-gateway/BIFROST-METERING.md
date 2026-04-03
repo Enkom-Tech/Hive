@@ -28,6 +28,12 @@ Use Bifrost’s **logs store** (SQLite/Postgres) or **Prometheus metrics** as th
 
 Run Bifrost with governance budgets only; **Hive cost rows for gateway traffic are incomplete** until Option 1 or 2 exists. Document in operator runbooks and product release notes.
 
+## Closing the gap (implementation)
+
+1. **Option 1 (recommended):** Build the Bifrost plugin from [`../bifrost-hive-metering`](../bifrost-hive-metering) on Linux: `make -C ../bifrost-hive-metering plugin` (or `CGO_ENABLED=1 go build -buildmode=plugin -o hive_metering.so ./plugin` from that directory). Register `hive_metering.so` in Bifrost `config.json`, and set **`operator_bearer`** to the control plane **`HIVE_INTERNAL_OPERATOR_SECRET`**. Ensure Bifrost can reach **`GET /api/internal/hive/gateway-virtual-key-lookup`** and **`POST /api/internal/hive/inference-metering`**. Details: [`BIFROST-RUNBOOK.md`](BIFROST-RUNBOOK.md) § Metering plugin.
+2. **Option 2:** Implement batch ETL from Bifrost logs or Prometheus into Hive (new or extended internal API as needed).
+3. **Option 3:** No code change; document acceptance in the runbook table and release notes.
+
 ## Decision record
 
 Record the chosen option in the environment-specific runbook ([`BIFROST-RUNBOOK.md`](BIFROST-RUNBOOK.md)) and revisit when streaming metering accuracy becomes a blocker.

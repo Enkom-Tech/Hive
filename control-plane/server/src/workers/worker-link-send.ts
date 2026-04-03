@@ -9,6 +9,13 @@ import {
 } from "./worker-link-registry.js";
 import { isWorkerDeliveryRedisConfigured, publishWorkerInstanceDeliver } from "./worker-delivery-redis.js";
 
+/** Deliver arbitrary JSON to a worker instance link: local socket first, then Redis bus (ADR 003). */
+export function deliverJsonToWorkerInstance(workerInstanceRowId: string, json: string): boolean {
+  if (trySendJsonToWorkerInstance(workerInstanceRowId, json)) return true;
+  publishWorkerInstanceDeliver(workerInstanceRowId, json);
+  return isWorkerDeliveryRedisConfigured();
+}
+
 export function sendRunToWorker(
   agentId: string,
   message: {

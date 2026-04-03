@@ -59,3 +59,9 @@ pnpm hive configure --section server
 With **more than one** control-plane API replica, WebSocket connections for `hive-worker` land on arbitrary instances. Set **`HIVE_WORKER_DELIVERY_BUS_URL`** to a shared **Redis-protocol** service (Redis, Dragonfly, Valkey, or compatible) so run/cancel payloads can reach the replica that holds the socket (see `doc/adr/003-unified-managed-worker-links.md`). Single-replica installs can omit the bus.
 
 For where to run workers (VPS, Docker, Kubernetes, air-gap) and how those paths map to one contract, see [Worker (drone) deployment matrix](./worker-deployment-matrix.md).
+
+Additional operator notes:
+
+- [Worker cancel grace on Windows](./worker-cancel-grace-windows.md) — `HIVE_CANCEL_GRACE_SECONDS` semantics differ from Linux.
+- [Execution workspace and remote workers](./execution-workspace-remote-workers.md) — git worktrees vs remote drones; optional **`HIVE_WORKSPACE_REMOTE_EXEC_GUARD`**.
+- [Worker WebSocket container policy](./worker-container-policy-ws.md) — signed allowlist; control-plane auto-push when env is set.

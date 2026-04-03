@@ -48,6 +48,8 @@ export interface AdapterExecutionDeps {
   issueService: ReturnType<typeof issueService>;
   secretService: ReturnType<typeof secretService>;
   publishLiveEvent: (event: { companyId: string; type: string; payload: Record<string, unknown> }) => void;
+  /** Fail runs that use control-plane-local git worktrees when remote workers cannot see paths. */
+  workspaceRemoteExecGuard: boolean;
 }
 
 export interface ExecuteRunInvocationResult {

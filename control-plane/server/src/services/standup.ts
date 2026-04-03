@@ -2,7 +2,18 @@ import { and, eq, isNull, ne } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { agents, companies, issues } from "@hive/db";
 import { notFound } from "../errors.js";
-import type { StandupReport, StandupAgentSection, StandupIssueSummary } from "@hive/shared";
+import {
+  ISSUE_STATUS_BLOCKED,
+  ISSUE_STATUS_CANCELLED,
+  ISSUE_STATUS_DONE,
+  ISSUE_STATUS_IN_PROGRESS,
+  ISSUE_STATUS_IN_REVIEW,
+  ISSUE_STATUS_QUALITY_REVIEW,
+  ISSUE_STATUS_TODO,
+  type StandupReport,
+  type StandupAgentSection,
+  type StandupIssueSummary,
+} from "@hive/shared";
 
 const STALE_CUTOFF_MS = 60 * 60 * 1000; // 1 hour
 const TEAM_ACCOMPLISHMENTS_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -57,7 +68,7 @@ export function standupService(db: Db) {
         .where(
           and(
             eq(issues.companyId, companyId),
-            ne(issues.status, "cancelled"),
+            ne(issues.status, ISSUE_STATUS_CANCELLED),
             isNull(issues.hiddenAt),
           ),
         );
@@ -85,7 +96,7 @@ export function standupService(db: Db) {
       for (const row of allIssues) {
         const summary = toSummary(row);
 
-        if (row.status === "done") {
+        if (row.status === ISSUE_STATUS_DONE) {
           if (row.completedAt && row.completedAt >= accomplishmentsCutoff) {
             teamAccomplishments.push(summary);
           }
@@ -96,7 +107,7 @@ export function standupService(db: Db) {
           continue;
         }
 
-        if (row.status === "blocked") {
+        if (row.status === ISSUE_STATUS_BLOCKED) {
           blockers.push(summary);
           if (row.assigneeAgentId) {
             const section = agentSectionByAgentId.get(row.assigneeAgentId);
@@ -105,7 +116,7 @@ export function standupService(db: Db) {
           continue;
         }
 
-        if (row.status === "in_progress") {
+        if (row.status === ISSUE_STATUS_IN_PROGRESS) {
           if (row.startedAt && row.startedAt < staleCutoff) {
             overdue.push(summary);
           }
@@ -116,7 +127,7 @@ export function standupService(db: Db) {
           continue;
         }
 
-        if (row.status === "in_review" || row.status === "quality_review") {
+        if (row.status === ISSUE_STATUS_IN_REVIEW || row.status === ISSUE_STATUS_QUALITY_REVIEW) {
           if (row.assigneeAgentId) {
             const section = agentSectionByAgentId.get(row.assigneeAgentId);
             if (section) section.review.push(summary);
@@ -124,7 +135,7 @@ export function standupService(db: Db) {
           continue;
         }
 
-        if (row.status === "todo" && row.assigneeAgentId) {
+        if (row.status === ISSUE_STATUS_TODO && row.assigneeAgentId) {
           const section = agentSectionByAgentId.get(row.assigneeAgentId);
           if (section) section.assigned.push(summary);
         }

@@ -4,6 +4,11 @@ import { WebSocket } from "ws";
 import { logger } from "../middleware/logger.js";
 import { mintWorkerApiToken } from "../auth/worker-jwt.js";
 import type { MintInstanceLinkToken } from "./worker-link-types.js";
+import {
+  tryBuildWorkerContainerPolicyMessage,
+  type WorkerContainerPolicyBroadcastConfig,
+} from "./worker-container-policy.js";
+import { deliverJsonToWorkerInstance } from "./worker-link-send.js";
 
 export const WORKER_LINK_PATH = "/api/workers/link";
 
@@ -63,5 +68,27 @@ export async function sendWorkerApiToken(
     logger.info({ connectionId, workerInstanceRowId }, "worker link sent worker_api_token");
   } catch (err) {
     logger.error({ err, connectionId, workerInstanceRowId }, "worker link failed to send worker_api_token");
+  }
+}
+
+export function sendWorkerContainerPolicyIfConfigured(
+  workerInstanceRowId: string | undefined,
+  ws: WebSocket,
+  connectionId: string,
+  cfg: WorkerContainerPolicyBroadcastConfig | undefined,
+) {
+  const msg = tryBuildWorkerContainerPolicyMessage(cfg);
+  if (!msg) return;
+  const json = JSON.stringify(msg);
+  if (workerInstanceRowId && deliverJsonToWorkerInstance(workerInstanceRowId, json)) {
+    logger.info({ connectionId, workerInstanceRowId }, "worker link sent worker_container_policy");
+    return;
+  }
+  if (ws.readyState !== WebSocket.OPEN) return;
+  try {
+    ws.send(json);
+    logger.info({ connectionId }, "worker link sent worker_container_policy (direct ws)");
+  } catch (err) {
+    logger.error({ err, connectionId }, "worker link failed to send worker_container_policy");
   }
 }
