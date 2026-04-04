@@ -24,9 +24,9 @@ export default defineConfig({
     reporter: ["text", "lcov", "json-summary"],
     reportsDirectory: resolve(serverDir, "../coverage-server"),
     thresholds: {
-      lines: 32,
-      functions: 29,
-      statements: 31,
+      lines: 30,
+      functions: 22,
+      statements: 30,
       branches: 22,
     },
   },

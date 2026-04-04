@@ -1,3 +1,4 @@
+/// <reference path="../types/express.d.ts" />
 import type { Request, RequestHandler } from "express";
 import type { Principal } from "@hive/shared";
 

@@ -1,3 +1,4 @@
+/// <reference path="../types/express.d.ts" />
 import type { Request } from "express";
 import type { Principal } from "@hive/shared";
 import { unauthorized } from "../errors.js";
