@@ -579,9 +579,8 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
   const api = Router();
   registerMainApiRoutes(api, db, opts.storageService, {
     ...opts,
-    betterAuthHandler: undefined,
     resolveSession: opts.resolveSession,
-  } as unknown as Parameters<typeof import("./app.js").createApp>[1]);
+  });
   expressApp.use("/api", api);
   expressApp.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
@@ -678,3 +677,9 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
 
   return fastify;
 }
+
+/**
+ * Alias so index.ts can import createApp without knowing the underlying
+ * framework — this is the Fastify implementation.
+ */
+export const createApp = createFastifyApp;

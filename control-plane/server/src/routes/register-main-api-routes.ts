@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@hive/db";
-import type { createApp } from "../app.js";
+import type { CreateAppOpts } from "../fastify-app.js";
 import type { StorageService } from "../storage/types.js";
 import { workloadService } from "../services/workload.js";
 import { healthRoutes } from "./health.js";
@@ -38,8 +38,6 @@ import { instanceRoutes } from "./instance.js";
 import { instanceStatusRoutes } from "./instance-status.js";
 import { boardMutationGuard } from "../middleware/board-mutation-guard.js";
 import { renderPlacementPrometheusScrape } from "../placement-metrics.js";
-
-type CreateAppOpts = Parameters<typeof createApp>[1];
 
 /**
  * Mounts all standard `/api` routers (everything under the `api` Router created in createApp).

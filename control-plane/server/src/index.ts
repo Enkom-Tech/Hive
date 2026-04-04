@@ -1,11 +1,9 @@
-/// <reference path="./types/express.d.ts" />
 /// <reference path="./types/fastify.d.ts" />
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import detectPort from "detect-port";
-import type { Request as ExpressRequest, RequestHandler } from "express";
-import { createApp } from "./app.js";
+import type { Request as ExpressRequest } from "express";
 import { createFastifyApp } from "./fastify-app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
@@ -63,7 +61,6 @@ export async function startServer(): Promise<StartedServer> {
   startupDbInfo = dbBootstrap.startupDbInfo;
 
   let authReady = config.deploymentMode === "local_trusted";
-  let betterAuthHandler: RequestHandler | undefined;
   let resolveSession:
     | ((req: ExpressRequest) => Promise<BetterAuthSessionResult | null>)
     | undefined;
@@ -74,7 +71,6 @@ export async function startServer(): Promise<StartedServer> {
 
   const authBootstrap = await bootstrapAuth(config, db);
   authReady = authBootstrap.authReady;
-  betterAuthHandler = authBootstrap.betterAuthHandler;
   const betterAuthInstance = authBootstrap.betterAuthInstance;
   resolveSession = authBootstrap.resolveSession;
   resolveSessionFromHeaders = authBootstrap.resolveSessionFromHeaders;
@@ -122,28 +118,18 @@ export async function startServer(): Promise<StartedServer> {
     bifrostAdminToken: config.bifrostAdminToken,
     authPublicBaseUrl: config.authPublicBaseUrl,
     authDisableSignUp: config.authDisableSignUp,
-    betterAuthHandler,
-    resolveSession,
     principalResolver,
     activeDatabaseConnectionString,
   } as const;
 
-  const useFastify = process.env.HIVE_USE_FASTIFY === "true";
-
-  let server: ReturnType<typeof createServer>;
-  if (useFastify) {
-    const fastifyApp = await createFastifyApp(db, {
-      ...appOpts,
-      betterAuthInstance,
-      resolveSession,
-      resolveSessionFromHeaders,
-    });
-    await fastifyApp.ready();
-    server = fastifyApp.server;
-  } else {
-    const app = await createApp(db, appOpts);
-    server = createServer(app as unknown as Parameters<typeof createServer>[0]);
-  }
+  const fastifyApp = await createFastifyApp(db, {
+    ...appOpts,
+    betterAuthInstance,
+    resolveSession,
+    resolveSessionFromHeaders,
+  });
+  await fastifyApp.ready();
+  const server = fastifyApp.server;
 
   if (listenPort !== config.port) {
     logger.warn(`Requested port is busy; using next free port (requestedPort=${config.port}, selectedPort=${listenPort})`);
