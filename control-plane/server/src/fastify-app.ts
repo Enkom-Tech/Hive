@@ -7,7 +7,7 @@
  *
  * Phase 2: global middleware (CORS, CSP nonce, Helmet, rate-limit, body
  * parsing, principal, board-mutation-guard, sign-up gate, auth routes).
- * Phase 3: route domain plugins.
+ * Phase 3: Express routes mounted via @fastify/middie adapter shim.
  * Phase 4: Vite / static UI.
  */
 import path from "node:path";
@@ -18,6 +18,9 @@ import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply }
 import fastifyCors from "@fastify/cors";
 import fastifyHelmet from "@fastify/helmet";
 import fastifyRateLimit from "@fastify/rate-limit";
+import fastifyMiddie from "@fastify/middie";
+import fastifyStatic from "@fastify/static";
+import express, { Router } from "express";
 import { count } from "drizzle-orm";
 import { ZodError } from "zod";
 import type { Db } from "@hive/db";
@@ -35,6 +38,9 @@ import { applyUiBranding } from "./ui-branding.js";
 import { ensureCspNonceOnScriptOpeningTags } from "./middleware/csp-nonce.js";
 import { startPluginSupervisorRuntime } from "./services/plugin-supervisor.js";
 import type { PrincipalResolver } from "./middleware/auth.js";
+import { registerMainApiRoutes } from "./routes/register-main-api-routes.js";
+import { llmRoutes } from "./routes/llms.js";
+import { registerGithubWebhookBeforeJson } from "./routes/integrations-github.js";
 
 export type UiMode = "none" | "static" | "vite-dev";
 
@@ -78,7 +84,15 @@ export type CreateAppOpts = {
    * Passed through from bootstrap/auth.ts via betterAuthInstance.
    */
   betterAuthInstance?: unknown;
-  resolveSession?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
+  /**
+   * Express-style session resolver — used by the SSE handler and other Express
+   * routes mounted via the middie adapter shim during Phase 3.
+   */
+  resolveSession?: ((req: import("express").Request) => Promise<BetterAuthSessionResult | null>) | undefined;
+  /**
+   * Fetch-style session resolver — used by Fastify-native auth hooks.
+   */
+  resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
   principalResolver: PrincipalResolver;
   activeDatabaseConnectionString?: string;
 };
@@ -532,6 +546,133 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
     }
     void reply.status(404).send({ error: "Not found" });
   });
+
+  // ── Express route adapter (Phase 3) ─────────────────────────────────────
+  // Mount the existing Express routers via @fastify/middie until they are
+  // progressively converted to Fastify plugins in subsequent phases.
+  await fastify.register(fastifyMiddie);
+
+  // Bridge req.principal from Fastify to the Express Request so existing
+  // Express route handlers can read req.principal as expected.
+  const expressApp = express();
+  expressApp.use((req, _res, next) => {
+    // The Fastify request has already resolved principal; copy it to the
+    // Express-compatible req object that middie creates.
+    (req as express.Request & { principal: Principal | null }).principal =
+      (req as unknown as FastifyRequest).principal ?? null;
+    next();
+  });
+
+  // GitHub webhook (raw body, before JSON parser)
+  registerGithubWebhookBeforeJson(expressApp, db, {
+    enabled: opts.vcsGitHubWebhookEnabled,
+    secret: opts.vcsGitHubWebhookSecret,
+    allowedRepos: opts.vcsGitHubAllowedRepos,
+  });
+
+  expressApp.use(express.json());
+
+  // LLM routes (outside /api prefix in Express)
+  expressApp.use(llmRoutes(db));
+
+  // Main API routes
+  const api = Router();
+  registerMainApiRoutes(api, db, opts.storageService, {
+    ...opts,
+    betterAuthHandler: undefined,
+    resolveSession: opts.resolveSession,
+  } as unknown as Parameters<typeof import("./app.js").createApp>[1]);
+  expressApp.use("/api", api);
+  expressApp.use("/api", (_req, res) => {
+    res.status(404).json({ error: "API route not found" });
+  });
+
+  fastify.use(expressApp);
+
+  // ── Static / Vite dev UI (Phase 4) ────────────────────────────────────────
+  const CSP_NONCE_PLACEHOLDER = "__CSP_NONCE__";
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+  if (opts.uiMode === "static") {
+    const candidates = [
+      path.resolve(__dirname, "../ui-dist"),
+      path.resolve(__dirname, "../../ui/dist"),
+    ];
+    const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
+    if (uiDist) {
+      const cachedIndexTemplate = applyUiBranding(
+        fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"),
+      );
+      await fastify.register(fastifyStatic, { root: uiDist, wildcard: false });
+      fastify.get("/*", async (req, reply) => {
+        const nonce = getNonce(reply);
+        const html = cachedIndexTemplate.replace(
+          new RegExp(CSP_NONCE_PLACEHOLDER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+          nonce,
+        );
+        return reply.status(200).type("text/html").send(html);
+      });
+    } else {
+      console.warn("[hive] UI dist not found; running in API-only mode");
+    }
+  }
+
+  if (opts.uiMode === "vite-dev") {
+    const uiRoot = path.resolve(__dirname, "../../ui");
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      root: uiRoot,
+      appType: "custom",
+      server: {
+        middlewareMode: true,
+        hmr: {
+          host: opts.bindHost,
+          port: viteHmrPort,
+          clientPort: viteHmrPort,
+        },
+        allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
+      },
+    });
+
+    let indexHtmlTransformChain: Promise<unknown> = Promise.resolve();
+    const transformIndexHtmlWithCspNonce = async (url: string, html: string, cspNonce: string) => {
+      const run = indexHtmlTransformChain.then(async () => {
+        const root = vite.config as unknown as { html?: { cspNonce?: string } };
+        if (!root.html) root.html = {};
+        root.html.cspNonce = cspNonce;
+        try {
+          return await vite.transformIndexHtml(url, html);
+        } finally {
+          delete root.html.cspNonce;
+        }
+      });
+      indexHtmlTransformChain = run.then(() => undefined, () => undefined);
+      return run;
+    };
+
+    // Mount Vite's Connect middleware via middie
+    fastify.use(vite.middlewares);
+
+    // Catch-all: serve transformed index.html for SPA routes
+    fastify.get("/*", async (req, reply) => {
+      try {
+        const templatePath = path.resolve(uiRoot, "index.html");
+        const template = fs.readFileSync(templatePath, "utf-8");
+        const nonce = getNonce(reply);
+        const withNonce = template.replace(
+          new RegExp(CSP_NONCE_PLACEHOLDER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+          nonce,
+        );
+        const html = ensureCspNonceOnScriptOpeningTags(
+          applyUiBranding(await transformIndexHtmlWithCspNonce(req.url, withNonce, nonce) as string),
+          nonce,
+        );
+        return reply.status(200).type("text/html").send(html);
+      } catch (err) {
+        throw err;
+      }
+    });
+  }
 
   startPluginSupervisorRuntime();
 

@@ -1,7 +1,10 @@
 import express, { type Router } from "express";
+import Fastify, { type FastifyInstance, type FastifyPlugin } from "fastify";
 import type { Principal } from "@hive/shared";
 import { LOCAL_BOARD_USER_ID } from "../../board-claim.js";
 import { errorHandler } from "../../middleware/error-handler.js";
+import { HttpError } from "../../errors.js";
+import { ZodError } from "zod";
 
 export type BoardPrincipalOpts = {
   id?: string;
@@ -120,4 +123,59 @@ export function principalNone(): null {
 /** @deprecated Use principalNone. */
 export function actorNone(): null {
   return principalNone();
+}
+
+// ─── Fastify test helper ───────────────────────────────────────────────────────
+
+export interface FastifyRouteTestOptions {
+  /**
+   * A Fastify plugin (async function taking a FastifyInstance) to mount at /api.
+   * The plugin must be a valid Fastify plugin decorated with fastify-plugin or
+   * registered via fastify.register().
+   */
+  plugin: FastifyPlugin;
+  /** Principal to inject; defaults to board user with companyIds ["company-1"] */
+  principal?: TestPrincipal;
+}
+
+/**
+ * Creates a minimal Fastify instance for route tests.
+ *
+ * Usage:
+ * ```ts
+ * const app = await createRouteTestFastify({ plugin: healthPlugin });
+ * const res = await app.inject({ method: "GET", url: "/api/health" });
+ * expect(res.statusCode).toBe(200);
+ * await app.close();
+ * ```
+ */
+export async function createRouteTestFastify(options: FastifyRouteTestOptions): Promise<FastifyInstance> {
+  const { plugin, principal = defaultPrincipal } = options;
+
+  const fastify = Fastify({ logger: false });
+
+  // Inject principal on every request
+  fastify.addHook("onRequest", async (req) => {
+    req.principal = principal;
+  });
+
+  // Error handler matching Express error-handler semantics
+  fastify.setErrorHandler((err, _req, reply) => {
+    if (err instanceof HttpError) {
+      void reply.status(err.status).send({
+        error: err.message,
+        ...(err.details ? { details: err.details } : {}),
+      });
+      return;
+    }
+    if (err instanceof ZodError) {
+      void reply.status(400).send({ error: "Validation error", details: err.issues });
+      return;
+    }
+    void reply.status(500).send({ error: "Internal server error" });
+  });
+
+  await fastify.register(plugin, { prefix: "/api" });
+  await fastify.ready();
+  return fastify;
 }

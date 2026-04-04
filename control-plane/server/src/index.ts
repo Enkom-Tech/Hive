@@ -135,7 +135,8 @@ export async function startServer(): Promise<StartedServer> {
     const fastifyApp = await createFastifyApp(db, {
       ...appOpts,
       betterAuthInstance,
-      resolveSession: resolveSessionFromHeaders,
+      resolveSession,
+      resolveSessionFromHeaders,
     });
     await fastifyApp.ready();
     server = fastifyApp.server;
