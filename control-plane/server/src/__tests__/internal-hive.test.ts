@@ -1,8 +1,7 @@
-import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { internalHiveOperatorRoutes } from "../routes/internal-hive.js";
-import { errorHandler } from "../middleware/error-handler.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { internalHiveOperatorPlugin } from "../routes/internal-hive.js";
+import { createRouteTestFastify } from "./helpers/route-app.js";
 
 const mockDb = {} as import("@hive/db").Db;
 const companyId = "550e8400-e29b-41d4-a716-446655440000";
@@ -20,23 +19,31 @@ vi.mock("../services/costs.js", () => ({
 }));
 
 describe("internal hive routes", () => {
+  let app: FastifyInstance;
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  function app(secret: string) {
-    const a = express();
-    a.use(express.json());
-    a.use("/internal/hive", internalHiveOperatorRoutes(mockDb, { operatorSecret: secret }));
-    a.use(errorHandler);
-    return a;
+  async function buildApp(secret: string): Promise<FastifyInstance> {
+    return createRouteTestFastify({
+      plugin: async (fastify) => {
+        await internalHiveOperatorPlugin(fastify, { db: mockDb, operatorSecret: secret });
+      },
+    });
   }
 
+  afterEach(async () => {
+    await app?.close();
+  });
+
   it("rejects missing bearer token", async () => {
+    app = await buildApp("op-secret");
     const occurredAt = new Date().toISOString();
-    await request(app("op-secret"))
-      .post("/internal/hive/inference-metering")
-      .send({
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/hive/inference-metering",
+      payload: {
         companyId,
         source: "gateway_aggregate",
         provider: "model_gateway",
@@ -45,17 +52,20 @@ describe("internal hive routes", () => {
         outputTokens: 2,
         costCents: 0,
         occurredAt,
-      })
-      .expect(401);
+      },
+    });
+    expect(res.statusCode).toBe(401);
     expect(createEvent).not.toHaveBeenCalled();
   });
 
   it("creates gateway_aggregate cost event", async () => {
+    app = await buildApp("op-secret");
     const occurredAt = new Date().toISOString();
-    const res = await request(app("op-secret"))
-      .post("/internal/hive/inference-metering")
-      .set("Authorization", "Bearer op-secret")
-      .send({
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/hive/inference-metering",
+      headers: { authorization: "Bearer op-secret" },
+      payload: {
         companyId,
         source: "gateway_aggregate",
         agentId: null,
@@ -65,9 +75,10 @@ describe("internal hive routes", () => {
         outputTokens: 2,
         costCents: 0,
         occurredAt,
-      })
-      .expect(201);
-    expect(res.body.id).toBe("cost-event-1");
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().id).toBe("cost-event-1");
     expect(createEvent).toHaveBeenCalledWith(
       companyId,
       expect.objectContaining({
@@ -82,11 +93,13 @@ describe("internal hive routes", () => {
   });
 
   it("forwards idempotencyKey to gatewayMeteringKey", async () => {
+    app = await buildApp("op-secret");
     const occurredAt = new Date().toISOString();
-    await request(app("op-secret"))
-      .post("/internal/hive/inference-metering")
-      .set("Authorization", "Bearer op-secret")
-      .send({
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/hive/inference-metering",
+      headers: { authorization: "Bearer op-secret" },
+      payload: {
         companyId,
         source: "gateway_aggregate",
         agentId: null,
@@ -97,8 +110,9 @@ describe("internal hive routes", () => {
         costCents: 0,
         occurredAt,
         idempotencyKey: "idem-test-1",
-      })
-      .expect(201);
+      },
+    });
+    expect(res.statusCode).toBe(201);
     expect(createEvent).toHaveBeenCalledWith(
       companyId,
       expect.objectContaining({ gatewayMeteringKey: "idem-test-1" }),

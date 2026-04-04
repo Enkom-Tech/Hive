@@ -1,13 +1,17 @@
-import type { Request } from "express";
 import type { invites } from "@hive/db";
 import type { DeploymentExposure, DeploymentMode } from "@hive/shared";
 import type { JoinDiagnostic } from "./join-payload.js";
+import type { HeaderCarrier } from "../../authz.js";
 
-function requestBaseUrl(req: Request) {
-  const forwardedProto = req.header("x-forwarded-proto");
-  const proto = forwardedProto?.split(",")[0]?.trim() || req.protocol || "http";
-  const host =
-    req.header("x-forwarded-host")?.split(",")[0]?.trim() || req.header("host");
+function requestBaseUrl(req: HeaderCarrier) {
+  const rawHeaders = req.headers;
+  const getHeader = (name: string): string | undefined => {
+    const val = (rawHeaders as Record<string, string | string[] | undefined>)[name];
+    return Array.isArray(val) ? val[0] : val;
+  };
+  const forwardedProto = getHeader("x-forwarded-proto");
+  const proto = forwardedProto?.split(",")[0]?.trim() || "http";
+  const host = getHeader("x-forwarded-host")?.split(",")[0]?.trim() || getHeader("host");
   if (!host) return "";
   return `${proto}://${host}`;
 }
@@ -33,7 +37,7 @@ function normalizeHostname(value: string | null | undefined): string | null {
 }
 
 export function toInviteSummaryResponse(
-  req: Request,
+  req: HeaderCarrier,
   token: string,
   invite: typeof invites.$inferSelect,
 ) {
@@ -168,7 +172,7 @@ function buildOnboardingConnectionCandidates(input: {
 }
 
 function buildInviteOnboardingManifest(
-  req: Request,
+  req: HeaderCarrier,
   token: string,
   invite: typeof invites.$inferSelect,
   opts: {
@@ -259,7 +263,7 @@ function buildInviteOnboardingManifest(
 }
 
 export function buildInviteOnboardingTextDocument(
-  req: Request,
+  req: HeaderCarrier,
   token: string,
   invite: typeof invites.$inferSelect,
   opts: {

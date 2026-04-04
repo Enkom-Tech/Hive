@@ -1,6 +1,5 @@
-import { Router } from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
 import {
   companies,
   gatewayVirtualKeys,
@@ -8,8 +7,8 @@ import {
   inferenceModels,
   modelTrainingRuns,
 } from "@hive/db";
-import { companyRoutes } from "../routes/companies/index.js";
-import { createRouteTestApp, principalBoard } from "./helpers/route-app.js";
+import { companiesPlugin } from "../routes/companies/index.js";
+import { createRouteTestFastify, principalBoard } from "./helpers/route-app.js";
 
 const companyId = "550e8400-e29b-41d4-a716-446655440000";
 const deploymentId = "a0000000-0000-4000-8000-000000000001";
@@ -267,32 +266,38 @@ function createStatefulDb() {
   return db;
 }
 
-function servicesMockedRouter(db: import("@hive/db").Db) {
-  const r = Router();
-  r.use("/companies", companyRoutes(db));
-  return r;
-}
-
 describe("model training promote and inference router config", () => {
+  let app: FastifyInstance;
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
+  afterEach(async () => {
+    await app?.close();
+  });
+
   it("GET inference-router-config includes model after POST promote", async () => {
     const db = createStatefulDb();
-    const app = createRouteTestApp({
-      router: servicesMockedRouter(db),
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => companiesPlugin(fastify, { db }),
       principal: principalBoard({ companyIds: [companyId], isSystem: true }),
     });
 
-    await request(app)
-      .post(`/api/companies/${companyId}/model-training-runs/${runId}/promote`)
-      .send({})
-      .expect(200);
+    const promoteRes = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyId}/model-training-runs/${runId}/promote`,
+      payload: {},
+      headers: { "content-type": "application/json" },
+    });
+    expect(promoteRes.statusCode).toBe(200);
 
-    const res = await request(app).get(`/api/companies/${companyId}/inference-router-config`).expect(200);
-
-    expect(res.body.models.models).toEqual(
+    const configRes = await app.inject({
+      method: "GET",
+      url: `/api/companies/${companyId}/inference-router-config`,
+    });
+    expect(configRes.statusCode).toBe(200);
+    expect(configRes.json().models.models).toEqual(
       expect.arrayContaining([{ id: "promoted-slug", base_url: "http://trained/v1" }]),
     );
   });

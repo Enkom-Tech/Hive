@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import type { NextFunction, Request, Response, Router } from "express";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   createWorkerIdentitySlotSchema,
@@ -9,12 +9,11 @@ import {
   droneAutoDeployProfileQuerySchema,
   isDigestPinnedImageRef,
 } from "@hive/shared";
-import { validate } from "../../middleware/validate.js";
 import { logActivity } from "../../services/index.js";
 import {
   resolveEffectiveWorkerRuntimeManifest,
 } from "../../services/worker-provision-manifest.js";
-import { sendSignedProvisionManifestJson } from "../../services/worker-manifest-signature.js";
+import { sendSignedProvisionManifestJsonRaw } from "../../services/worker-manifest-signature.js";
 import { canReadCompanyWorkerRuntimeManifest } from "../../services/worker-runtime-manifest-access.js";
 import { buildDroneAutoDeployProfile } from "../../services/drone-auto-deploy-profile.js";
 import {
@@ -36,431 +35,306 @@ const mintDeployGrantSchema = z
     path: ["imageRef"],
   });
 
-function validateDeployGrantRequest(req: Request, res: Response, next: NextFunction) {
-  const r = mintDeployGrantSchema.safeParse(req.body);
-  if (!r.success) {
-    const digestIssue = r.error.issues.find(
-      (i) => i.path.length === 1 && i.path[0] === "imageRef" && i.code === "custom",
-    );
-    if (digestIssue) {
-      res.status(422).json({ error: digestIssue.message });
-      return;
-    }
-    res.status(400).json({ error: "Validation error", details: r.error.issues });
-    return;
-  }
-  req.body = r.data;
-  next();
-}
-
-function resolveApiPublicBaseUrl(
-  req: Request,
+function resolveApiPublicBaseUrlF(
+  req: FastifyRequest,
   routeOpts: CompanyRoutesDeps["routeOpts"],
 ): string | null {
   const configured = routeOpts?.apiPublicBaseUrl?.trim();
   if (configured) return configured.replace(/\/$/, "");
-  const xfProto = req.get("x-forwarded-proto");
-  const xfHost = req.get("x-forwarded-host");
+  const xfProto = req.headers["x-forwarded-proto"] as string | undefined;
+  const xfHost = req.headers["x-forwarded-host"] as string | undefined;
   if (xfHost) {
     const proto = xfProto?.split(",")[0]?.trim() || "https";
     return `${proto}://${xfHost.split(",")[0].trim()}`;
   }
-  const host = req.get("host");
+  const host = req.headers.host;
   if (host) return `http://${host}`;
   return null;
 }
 
-export function registerCompanyWorkerInfraEarlyRoutes(router: Router, deps: CompanyRoutesDeps) {
+export function registerCompanyWorkerInfraEarlyRoutesF(fastify: FastifyInstance, deps: CompanyRoutesDeps) {
   const { db, routeOpts, svc, agents } = deps;
 
-  /** Per-company worker runtime manifest (company JSON overrides server-global manifest). */
-  router.get("/:companyId/worker-runtime/manifest", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/worker-runtime/manifest", async (req, reply) => {
+    const { companyId } = req.params;
     const allowed = await canReadCompanyWorkerRuntimeManifest(db, req, companyId);
-    if (!allowed) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
+    if (!allowed) return reply.status(401).send({ error: "Unauthorized" });
     try {
       const company = await svc.getById(companyId);
-      if (!company) {
-        res.status(404).json({ error: "Company not found" });
-        return;
-      }
+      if (!company) return reply.status(404).send({ error: "Company not found" });
       const manifest = await resolveEffectiveWorkerRuntimeManifest({
         companyManifestJson: company.workerRuntimeManifestJson,
         globalInlineJson: routeOpts?.workerProvisionManifestJson,
         globalFilePath: routeOpts?.workerProvisionManifestFile,
       });
-      if (!manifest) {
-        res.status(404).json({ error: "Provision manifest not configured" });
-        return;
-      }
-      sendSignedProvisionManifestJson(res, manifest, routeOpts?.workerProvisionManifestSigningKeyPem, () => {
-        res.setHeader("Cache-Control", "private, max-age=60");
+      if (!manifest) return reply.status(404).send({ error: "Provision manifest not configured" });
+      sendSignedProvisionManifestJsonRaw(reply.raw, manifest, routeOpts?.workerProvisionManifestSigningKeyPem, () => {
+        reply.raw.setHeader("Cache-Control", "private, max-age=60");
       });
+      reply.hijack();
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      return reply.status(500).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  router.get("/:companyId/worker-identity-slots", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/worker-identity-slots", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyRead(db, req, companyId);
-    const slots = await agents.listWorkerIdentitySlots(companyId);
-    res.json({ slots });
+    return reply.send({ slots: await agents.listWorkerIdentitySlots(companyId) });
   });
 
-  router.post(
-    "/:companyId/worker-identity-slots",
-    validate(createWorkerIdentitySlotSchema),
-    async (req, res) => {
-      const companyId = req.params.companyId as string;
-      await assertCompanyPermission(db, req, companyId, "company:settings");
-      const row = await agents.createWorkerIdentitySlot(companyId, req.body);
-      const actor = getActorInfo(req);
-      await logActivity(db, {
-        companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "company.worker_identity_slot_created",
-        entityType: "company",
-        entityId: companyId,
-        details: { slotId: row.id, profileKey: row.profileKey, desiredCount: row.desiredCount },
-      });
-      res.status(201).json(row);
-    },
-  );
+  fastify.post<{ Params: { companyId: string } }>("/api/companies/:companyId/worker-identity-slots", async (req, reply) => {
+    const { companyId } = req.params;
+    const parsed = createWorkerIdentitySlotSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    const row = await agents.createWorkerIdentitySlot(companyId, parsed.data);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "company.worker_identity_slot_created",
+      entityType: "company", entityId: companyId,
+      details: { slotId: row.id, profileKey: row.profileKey, desiredCount: row.desiredCount },
+    });
+    return reply.status(201).send(row);
+  });
 
-  router.patch(
-    "/:companyId/worker-identity-slots/:slotId",
-    validate(patchWorkerIdentitySlotSchema),
-    async (req, res) => {
-      const companyId = req.params.companyId as string;
-      const slotId = req.params.slotId as string;
-      await assertCompanyPermission(db, req, companyId, "company:settings");
-      const row = await agents.patchWorkerIdentitySlot(companyId, slotId, req.body);
-      const actor = getActorInfo(req);
-      await logActivity(db, {
-        companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "company.worker_identity_slot_updated",
-        entityType: "company",
-        entityId: companyId,
-        details: { slotId, patchKeys: Object.keys(req.body as object) },
-      });
-      res.json(row);
-    },
-  );
+  fastify.patch<{ Params: { companyId: string; slotId: string } }>("/api/companies/:companyId/worker-identity-slots/:slotId", async (req, reply) => {
+    const { companyId, slotId } = req.params;
+    const parsed = patchWorkerIdentitySlotSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    const row = await agents.patchWorkerIdentitySlot(companyId, slotId, parsed.data);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "company.worker_identity_slot_updated",
+      entityType: "company", entityId: companyId,
+      details: { slotId, patchKeys: Object.keys(parsed.data as object) },
+    });
+    return reply.send(row);
+  });
 
-  router.delete("/:companyId/worker-identity-slots/:slotId", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const slotId = req.params.slotId as string;
+  fastify.delete<{ Params: { companyId: string; slotId: string } }>("/api/companies/:companyId/worker-identity-slots/:slotId", async (req, reply) => {
+    const { companyId, slotId } = req.params;
     await assertCompanyPermission(db, req, companyId, "company:settings");
     await agents.deleteWorkerIdentitySlot(companyId, slotId);
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
       action: "company.worker_identity_slot_deleted",
-      entityType: "company",
-      entityId: companyId,
+      entityType: "company", entityId: companyId,
       details: { slotId },
     });
-    res.status(204).end();
+    return reply.status(204).send();
   });
 
-  router.get("/:companyId/worker-identity-automation/status", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/worker-identity-automation/status", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyRead(db, req, companyId);
-    res.json(await agents.getWorkerIdentityAutomationStatus(companyId));
+    return reply.send(await agents.getWorkerIdentityAutomationStatus(companyId));
   });
 
-  router.get("/:companyId/drone-auto-deploy/profile", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string }; Querystring: { target?: string } }>("/api/companies/:companyId/drone-auto-deploy/profile", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyRead(db, req, companyId);
     const parsed = droneAutoDeployProfileQuerySchema.safeParse({
       target: typeof req.query.target === "string" ? req.query.target : "docker",
     });
-    if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.flatten() });
-      return;
-    }
-    const apiPublicBaseUrl = resolveApiPublicBaseUrl(req, routeOpts);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.flatten() });
+    const apiPublicBaseUrl = resolveApiPublicBaseUrlF(req, routeOpts);
     if (!apiPublicBaseUrl) {
-      res.status(503).json({
-        error:
-          "Could not resolve public API base URL; set HIVE_AUTH_PUBLIC_BASE_URL / board public URL or rely on Host / X-Forwarded-* headers.",
-      });
-      return;
+      return reply.status(503).send({ error: "Could not resolve public API base URL; set HIVE_AUTH_PUBLIC_BASE_URL / board public URL or rely on Host / X-Forwarded-* headers." });
     }
-    res.json(
-      buildDroneAutoDeployProfile({
-        companyId,
-        target: parsed.data.target,
-        apiPublicBaseUrl,
-      }),
-    );
+    return reply.send(buildDroneAutoDeployProfile({ companyId, target: parsed.data.target, apiPublicBaseUrl }));
   });
 }
 
-export function registerCompanyWorkerInstanceManagementRoutes(router: Router, deps: CompanyRoutesDeps) {
+export function registerCompanyWorkerInstanceManagementRoutesF(fastify: FastifyInstance, deps: CompanyRoutesDeps) {
   const { db, agents } = deps;
 
-  router.post(
-    "/:companyId/worker-instances/:workerInstanceId/link-enrollment-tokens",
-    validate(mintWorkerEnrollmentTokenSchema),
-    async (req, res) => {
-      assertBoard(req);
-      const companyId = req.params.companyId as string;
-      const workerInstanceId = req.params.workerInstanceId as string;
-      await assertCompanyPermission(db, req, companyId, "company:settings");
-      const { ttlSeconds } = req.body as { ttlSeconds: number };
-      const { token, expiresAt } = await agents.createWorkerInstanceLinkEnrollmentToken(
-        companyId,
-        workerInstanceId,
-        ttlSeconds,
-      );
-      const actor = getActorInfo(req);
-      await logActivity(db, {
-        companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "worker_instance.link_enrollment_token_created",
-        entityType: "worker_instance",
-        entityId: workerInstanceId,
-        details: { ttlSeconds },
-      });
-      res.status(201).json({ token, expiresAt: expiresAt.toISOString() });
-    },
-  );
-
-  router.post(
-    "/:companyId/drone-provisioning-tokens",
-    validate(mintWorkerEnrollmentTokenSchema),
-    async (req, res) => {
-      assertBoard(req);
-      const companyId = req.params.companyId as string;
-      await assertCompanyPermission(db, req, companyId, "company:settings");
-      const { ttlSeconds } = req.body as { ttlSeconds: number };
-      const { token, expiresAt } = await agents.createDroneProvisioningToken(companyId, ttlSeconds);
-      const actor = getActorInfo(req);
-      await logActivity(db, {
-        companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "company.drone_provisioning_token_created",
-        entityType: "company",
-        entityId: companyId,
-        details: { ttlSeconds },
-      });
-      res.status(201).json({ token, expiresAt: expiresAt.toISOString() });
-    },
-  );
-
-  router.put(
-    "/:companyId/worker-instances/:workerInstanceId/agents/:agentId",
-    async (req, res) => {
-      assertBoard(req);
-      const companyId = req.params.companyId as string;
-      const workerInstanceId = req.params.workerInstanceId as string;
-      const agentId = req.params.agentId as string;
-      await assertCompanyPermission(db, req, companyId, "company:settings");
-      await agents.bindManagedWorkerAgentToInstance(companyId, workerInstanceId, agentId);
-      const actor = getActorInfo(req);
-      await logActivity(db, {
-        companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "worker_instance.agent_bound",
-        entityType: "worker_instance",
-        entityId: workerInstanceId,
-        details: { boundAgentId: agentId },
-      });
-      res.status(204).end();
-    },
-  );
-
-  /** Phase B (ADR 005): advance automatic pool binding to the next eligible drone. */
-  router.post("/:companyId/agents/:agentId/worker-pool/rotate", async (req, res) => {
+  fastify.post<{ Params: { companyId: string; workerInstanceId: string } }>("/api/companies/:companyId/worker-instances/:workerInstanceId/link-enrollment-tokens", async (req, reply) => {
     assertBoard(req);
-    const companyId = req.params.companyId as string;
-    const agentId = req.params.agentId as string;
+    const { companyId, workerInstanceId } = req.params;
+    const parsed = mintWorkerEnrollmentTokenSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    const { token, expiresAt } = await agents.createWorkerInstanceLinkEnrollmentToken(companyId, workerInstanceId, parsed.data.ttlSeconds);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "worker_instance.link_enrollment_token_created",
+      entityType: "worker_instance", entityId: workerInstanceId,
+      details: { ttlSeconds: parsed.data.ttlSeconds },
+    });
+    return reply.status(201).send({ token, expiresAt: expiresAt.toISOString() });
+  });
+
+  fastify.post<{ Params: { companyId: string } }>("/api/companies/:companyId/drone-provisioning-tokens", async (req, reply) => {
+    assertBoard(req);
+    const { companyId } = req.params;
+    const parsed = mintWorkerEnrollmentTokenSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    const { token, expiresAt } = await agents.createDroneProvisioningToken(companyId, parsed.data.ttlSeconds);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "company.drone_provisioning_token_created",
+      entityType: "company", entityId: companyId,
+      details: { ttlSeconds: parsed.data.ttlSeconds },
+    });
+    return reply.status(201).send({ token, expiresAt: expiresAt.toISOString() });
+  });
+
+  fastify.put<{ Params: { companyId: string; workerInstanceId: string; agentId: string } }>("/api/companies/:companyId/worker-instances/:workerInstanceId/agents/:agentId", async (req, reply) => {
+    assertBoard(req);
+    const { companyId, workerInstanceId, agentId } = req.params;
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    await agents.bindManagedWorkerAgentToInstance(companyId, workerInstanceId, agentId);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "worker_instance.agent_bound",
+      entityType: "worker_instance", entityId: workerInstanceId,
+      details: { boundAgentId: agentId },
+    });
+    return reply.status(204).send();
+  });
+
+  fastify.post<{ Params: { companyId: string; agentId: string } }>("/api/companies/:companyId/agents/:agentId/worker-pool/rotate", async (req, reply) => {
+    assertBoard(req);
+    const { companyId, agentId } = req.params;
     await assertCompanyPermission(db, req, companyId, "company:settings");
     const result = await agents.rotateAutomaticWorkerPoolPlacement(companyId, agentId);
     const actor = getActorInfo(req);
     if (result.rotated) {
       await logActivity(db, {
         companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
+        actorType: actor.actorType, actorId: actor.actorId,
+        agentId: actor.agentId, runId: actor.runId,
         action: "worker_instance.agent_pool_rotated",
-        entityType: "agent",
-        entityId: agentId,
-        details: {
-          fromWorkerInstanceId: result.fromWorkerInstanceId,
-          toWorkerInstanceId: result.toWorkerInstanceId,
-        },
+        entityType: "agent", entityId: agentId,
+        details: { fromWorkerInstanceId: result.fromWorkerInstanceId, toWorkerInstanceId: result.toWorkerInstanceId },
       });
     }
-    res.json(result);
+    return reply.send(result);
   });
 
-  router.delete("/:companyId/worker-instances/agents/:agentId", async (req, res) => {
+  fastify.delete<{ Params: { companyId: string; agentId: string } }>("/api/companies/:companyId/worker-instances/agents/:agentId", async (req, reply) => {
     assertBoard(req);
-    const companyId = req.params.companyId as string;
-    const agentId = req.params.agentId as string;
+    const { companyId, agentId } = req.params;
     await assertCompanyPermission(db, req, companyId, "company:settings");
     await agents.unbindManagedWorkerAgentFromInstance(companyId, agentId);
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
       action: "worker_instance.agent_unbound",
-      entityType: "agent",
-      entityId: agentId,
+      entityType: "agent", entityId: agentId,
       details: {},
     });
-    res.status(204).end();
+    return reply.status(204).send();
   });
 
-  router.patch(
-    "/:companyId/worker-instances/:workerInstanceId",
-    validate(patchWorkerInstanceSchema),
-    async (req, res) => {
-      assertBoard(req);
-      const companyId = req.params.companyId as string;
-      const workerInstanceId = req.params.workerInstanceId as string;
-      await assertCompanyPermission(db, req, companyId, "company:settings");
-      const result = await agents.patchWorkerInstance(companyId, workerInstanceId, req.body);
-      const actor = getActorInfo(req);
-      await logActivity(db, {
-        companyId,
-        actorType: actor.actorType,
-        actorId: actor.actorId,
-        agentId: actor.agentId,
-        runId: actor.runId,
-        action: "worker_instance.updated",
-        entityType: "worker_instance",
-        entityId: workerInstanceId,
-        details: {
-          patch: req.body,
-          drainEvacuation: result.drainEvacuation ?? null,
-        },
-      });
-      res.json(result);
-    },
-  );
-}
-
-export function registerCompanyWorkerDebugAndDeployRoutes(router: Router, deps: CompanyRoutesDeps) {
-  const { db, agents } = deps;
-
-  router.get("/:companyId/worker-link-debug", async (req, res, next) => {
-    try {
-      const companyId = req.params.companyId as string;
-      await assertCompanyPermission(db, req, companyId, "company:settings");
-      res.json(debugWorkerLinkPoolForCompany(companyId));
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  router.post(
-    "/:companyId/deploy-grants",
-    validateDeployGrantRequest,
-    async (req, res, next) => {
-      try {
-        const companyId = req.params.companyId as string;
-        await assertCompanyPermission(db, req, companyId, "company:settings");
-        const deployOn =
-          process.env.HIVE_REQUEST_DEPLOY_ENABLED === "1" ||
-          process.env.HIVE_REQUEST_DEPLOY_ENABLED?.toLowerCase() === "true";
-        if (!deployOn) {
-          res.status(404).json({ error: "request_deploy is not enabled on this server" });
-          return;
-        }
-        const secret = process.env.HIVE_DEPLOY_GRANT_SECRET?.trim();
-        if (!secret) {
-          res.status(503).json({ error: "HIVE_DEPLOY_GRANT_SECRET is not configured" });
-          return;
-        }
-        const { agentId, imageRef } = req.body as z.infer<typeof mintDeployGrantSchema>;
-        const agentRow = await agents.getById(agentId);
-        if (!agentRow || agentRow.companyId !== companyId) {
-          res.status(404).json({ error: "Agent not found" });
-          return;
-        }
-        const expiresAt = Date.now() + 5 * 60_000;
-        const signature = createHmac("sha256", secret)
-          .update(`${companyId}|${imageRef}|${expiresAt}`)
-          .digest("hex");
-        const delivered = sendDeployGrantToWorker(agentId, {
-          type: "deploy_grant",
-          companyId,
-          imageRef,
-          expiresAt: String(expiresAt),
-          signature,
-        });
-        const actor = getActorInfo(req);
-        await logActivity(db, {
-          companyId,
-          actorType: actor.actorType,
-          actorId: actor.actorId,
-          action: "worker.deploy_grant_minted",
-          entityType: "agent",
-          entityId: agentId,
-          details: { imageRef, delivered, expiresAt },
-        });
-        res.status(201).json({ ok: true, delivered, expiresAt, imageRef });
-      } catch (e) {
-        next(e);
-      }
-    },
-  );
-}
-
-export function registerCompanyWorkerInstanceDeleteRoute(router: Router, deps: CompanyRoutesDeps) {
-  const { db, agents } = deps;
-
-  router.delete("/:companyId/worker-instances/:workerInstanceId", async (req, res) => {
+  fastify.patch<{ Params: { companyId: string; workerInstanceId: string } }>("/api/companies/:companyId/worker-instances/:workerInstanceId", async (req, reply) => {
     assertBoard(req);
-    const companyId = req.params.companyId as string;
-    const workerInstanceId = req.params.workerInstanceId as string;
+    const { companyId, workerInstanceId } = req.params;
+    const parsed = patchWorkerInstanceSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    const result = await agents.patchWorkerInstance(companyId, workerInstanceId, parsed.data);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "worker_instance.updated",
+      entityType: "worker_instance", entityId: workerInstanceId,
+      details: { patch: parsed.data, drainEvacuation: result.drainEvacuation ?? null },
+    });
+    return reply.send(result);
+  });
+}
+
+export function registerCompanyWorkerDebugAndDeployRoutesF(fastify: FastifyInstance, deps: CompanyRoutesDeps) {
+  const { db, agents } = deps;
+
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/worker-link-debug", async (req, reply) => {
+    const { companyId } = req.params;
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    return reply.send(debugWorkerLinkPoolForCompany(companyId));
+  });
+
+  fastify.post<{ Params: { companyId: string } }>("/api/companies/:companyId/deploy-grants", async (req, reply) => {
+    const { companyId } = req.params;
+    await assertCompanyPermission(db, req, companyId, "company:settings");
+    const deployOn =
+      process.env.HIVE_REQUEST_DEPLOY_ENABLED === "1" ||
+      process.env.HIVE_REQUEST_DEPLOY_ENABLED?.toLowerCase() === "true";
+    if (!deployOn) return reply.status(404).send({ error: "request_deploy is not enabled on this server" });
+    const secret = process.env.HIVE_DEPLOY_GRANT_SECRET?.trim();
+    if (!secret) return reply.status(503).send({ error: "HIVE_DEPLOY_GRANT_SECRET is not configured" });
+
+    const r = mintDeployGrantSchema.safeParse(req.body);
+    if (!r.success) {
+      const digestIssue = r.error.issues.find((i) => i.path.length === 1 && i.path[0] === "imageRef" && i.code === "custom");
+      if (digestIssue) return reply.status(422).send({ error: digestIssue.message });
+      return reply.status(400).send({ error: "Validation error", details: r.error.issues });
+    }
+
+    const { agentId, imageRef } = r.data;
+    const agentRow = await agents.getById(agentId);
+    if (!agentRow || agentRow.companyId !== companyId) return reply.status(404).send({ error: "Agent not found" });
+    const expiresAt = Date.now() + 5 * 60_000;
+    const signature = createHmac("sha256", secret).update(`${companyId}|${imageRef}|${expiresAt}`).digest("hex");
+    const delivered = sendDeployGrantToWorker(agentId, {
+      type: "deploy_grant", companyId, imageRef,
+      expiresAt: String(expiresAt), signature,
+    });
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      action: "worker.deploy_grant_minted",
+      entityType: "agent", entityId: agentId,
+      details: { imageRef, delivered, expiresAt },
+    });
+    return reply.status(201).send({ ok: true, delivered, expiresAt, imageRef });
+  });
+}
+
+export function registerCompanyWorkerInstanceDeleteRouteF(fastify: FastifyInstance, deps: CompanyRoutesDeps) {
+  const { db, agents } = deps;
+
+  fastify.delete<{ Params: { companyId: string; workerInstanceId: string } }>("/api/companies/:companyId/worker-instances/:workerInstanceId", async (req, reply) => {
+    assertBoard(req);
+    const { companyId, workerInstanceId } = req.params;
     await assertCompanyPermission(db, req, companyId, "company:settings");
     forceDisconnectWorkerInstance(workerInstanceId);
     await agents.deleteWorkerInstance(companyId, workerInstanceId);
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
       action: "worker_instance.deleted",
-      entityType: "worker_instance",
-      entityId: workerInstanceId,
+      entityType: "worker_instance", entityId: workerInstanceId,
       details: {},
     });
-    res.status(204).end();
+    return reply.status(204).send();
   });
 }

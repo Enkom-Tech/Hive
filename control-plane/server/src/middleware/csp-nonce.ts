@@ -1,12 +1,19 @@
 import { randomBytes } from "node:crypto";
-import type { RequestHandler } from "express";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 /**
  * Generates a per-request nonce for CSP script-src and style-src so we can avoid 'unsafe-inline'.
  * Must run before Helmet so res.locals.cspNonce is set when CSP is applied.
  */
-export const cspNonceMiddleware: RequestHandler = (_req, res, next) => {
-  res.locals.cspNonce = randomBytes(32).toString("hex");
+export const cspNonceMiddleware = (
+  _req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void,
+): void => {
+  (res as ServerResponse & { locals: Record<string, unknown> }).locals = {
+    ...(res as ServerResponse & { locals?: Record<string, unknown> }).locals,
+    cspNonce: randomBytes(32).toString("hex"),
+  };
   next();
 };
 

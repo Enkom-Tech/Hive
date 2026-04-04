@@ -1,17 +1,14 @@
-import { Router } from "express";
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@hive/db";
-import { workerApiMetricsMiddleware } from "../middleware/worker-api-metrics.js";
 import {
   initPlacementPrometheus,
   renderPlacementPrometheusScrape,
   resetPrometheusRegistryForTests,
 } from "../placement-metrics.js";
 import { forbidden } from "../errors.js";
-import { workerApiRoutes } from "../routes/worker-api/index.js";
+import { workerApiPlugin } from "../routes/worker-api/index.js";
 import {
-  createRouteTestApp,
+  createRouteTestFastify,
   principalAgent,
   principalBoard,
   principalWorkerInstance,
@@ -164,12 +161,6 @@ function mockDbIssueCreateWithIdempotency(opts: {
   } as unknown as Db;
 }
 
-function apiRouter(db: Db) {
-  const r = Router();
-  r.use("/worker-api", workerApiMetricsMiddleware(), workerApiRoutes(db, { secretsStrictMode: false }));
-  return r;
-}
-
 describe("worker-api routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -184,104 +175,89 @@ describe("worker-api routes", () => {
   });
 
   it("returns 403 for board principal on cost-report", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalBoard({ companyIds: [companyA] }),
     });
     const occurredAt = new Date().toISOString();
-    await request(app)
-      .post("/api/worker-api/cost-report")
-      .send({
-        agentId,
-        provider: "openai",
-        model: "gpt-4o",
-        costCents: 1,
-        occurredAt,
-      })
-      .expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/cost-report",
+      payload: { agentId, provider: "openai", model: "gpt-4o", costCents: 1, occurredAt },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("returns 403 for agent principal on cost-report", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalAgent({ agentId, companyId: companyA }),
     });
     const occurredAt = new Date().toISOString();
-    await request(app)
-      .post("/api/worker-api/cost-report")
-      .send({
-        agentId,
-        provider: "openai",
-        model: "gpt-4o",
-        costCents: 1,
-        occurredAt,
-      })
-      .expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/cost-report",
+      payload: { agentId, provider: "openai", model: "gpt-4o", costCents: 1, occurredAt },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("returns 201 for worker_instance principal when agent is in company", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
     const occurredAt = new Date().toISOString();
-    const res = await request(app)
-      .post("/api/worker-api/cost-report")
-      .send({
-        agentId,
-        provider: "openai",
-        model: "gpt-4o",
-        costCents: 42,
-        occurredAt,
-      })
-      .expect(201);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.result.costEventId).toBe("cost-event-1");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/cost-report",
+      payload: { agentId, provider: "openai", model: "gpt-4o", costCents: 42, occurredAt },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().result.costEventId).toBe("cost-event-1");
     expect(svcMocks.createEvent).toHaveBeenCalledWith(
       companyA,
-      expect.objectContaining({
-        agentId,
-        provider: "openai",
-        model: "gpt-4o",
-        costCents: 42,
-      }),
+      expect.objectContaining({ agentId, provider: "openai", model: "gpt-4o", costCents: 42 }),
     );
+    await app.close();
   });
 
   it("returns 403 when agentId is not in worker company", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent(null)),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent(null), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
     const occurredAt = new Date().toISOString();
-    await request(app)
-      .post("/api/worker-api/cost-report")
-      .send({
-        agentId,
-        provider: "openai",
-        model: "gpt-4o",
-        costCents: 1,
-        occurredAt,
-      })
-      .expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/cost-report",
+      payload: { agentId, provider: "openai", model: "gpt-4o", costCents: 1, occurredAt },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("returns 403 for terminated agent on cost-report", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "terminated" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "terminated" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
     const occurredAt = new Date().toISOString();
-    await request(app)
-      .post("/api/worker-api/cost-report")
-      .send({
-        agentId,
-        provider: "openai",
-        model: "gpt-4o",
-        costCents: 1,
-        occurredAt,
-      })
-      .expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/cost-report",
+      payload: { agentId, provider: "openai", model: "gpt-4o", costCents: 1, occurredAt },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("returns 403 when issue belongs to another company", async () => {
@@ -291,14 +267,18 @@ describe("worker-api routes", () => {
       status: "todo",
       assigneeAgentId: null,
     });
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    await request(app)
-      .post(`/api/worker-api/issues/${issueUuid}/comments`)
-      .send({ agentId, body: "x" })
-      .expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/worker-api/issues/${issueUuid}/comments`,
+      payload: { agentId, body: "x" },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("returns 401 for in_progress checkout comment without x-hive-run-id", async () => {
@@ -308,14 +288,18 @@ describe("worker-api routes", () => {
       status: "in_progress",
       assigneeAgentId: agentId,
     });
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    await request(app)
-      .post(`/api/worker-api/issues/${issueUuid}/comments`)
-      .send({ agentId, body: "x" })
-      .expect(401);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/worker-api/issues/${issueUuid}/comments`,
+      payload: { agentId, body: "x" },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
   });
 
   it("issue.appendComment via worker_instance", async () => {
@@ -325,44 +309,56 @@ describe("worker-api routes", () => {
       status: "todo",
       assigneeAgentId: null,
     });
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    const res = await request(app)
-      .post(`/api/worker-api/issues/${issueUuid}/comments`)
-      .send({ agentId, body: "hello" })
-      .expect(200);
-    expect(res.body.result.commentId).toBe("comment-1");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/worker-api/issues/${issueUuid}/comments`,
+      payload: { agentId, body: "hello" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result.commentId).toBe("comment-1");
     expect(svcMocks.addComment).toHaveBeenCalled();
+    await app.close();
   });
 
   it("POST /issues creates issue via worker_instance", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    const res = await request(app)
-      .post("/api/worker-api/issues")
-      .send({ agentId, title: "From worker" })
-      .expect(201);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.result.issue.identifier).toBe("TST-1");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/issues",
+      payload: { agentId, title: "From worker" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().result.issue.identifier).toBe("TST-1");
     expect(svcMocks.createOrFoldIntent).toHaveBeenCalled();
     expect(svcMocks.createInTx).toHaveBeenCalled();
     expect(svcMocks.insertIntentLink).toHaveBeenCalled();
+    await app.close();
   });
 
   it("POST /issues rejects empty X-Hive-Worker-Idempotency-Key", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    await request(app)
-      .post("/api/worker-api/issues")
-      .set("X-Hive-Worker-Idempotency-Key", "   ")
-      .send({ agentId, title: "From worker" })
-      .expect(400);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/issues",
+      headers: { "X-Hive-Worker-Idempotency-Key": "   " },
+      payload: { agentId, title: "From worker" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
   });
 
   it("POST /issues idempotency replay skips create and side effects", async () => {
@@ -370,68 +366,91 @@ describe("worker-api routes", () => {
       ok: true,
       result: { issue: { id: issueUuid, identifier: "REPLAY-9", title: "cached" } },
     };
-    const app = createRouteTestApp({
-      router: apiRouter(
-        mockDbIssueCreateWithIdempotency({
-          agentRow: { id: agentId, status: "active" },
-          idempotencyCached: { httpStatus: 201, responseBody: cachedBody },
+    const app = await createRouteTestFastify({
+      plugin: (f) =>
+        workerApiPlugin(f, {
+          db: mockDbIssueCreateWithIdempotency({
+            agentRow: { id: agentId, status: "active" },
+            idempotencyCached: { httpStatus: 201, responseBody: cachedBody },
+          }),
+          secretsStrictMode: false,
         }),
-      ),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    const res = await request(app)
-      .post("/api/worker-api/issues")
-      .set("X-Hive-Worker-Idempotency-Key", "key-replay-1")
-      .send({ agentId, title: "From worker" })
-      .expect(201);
-    expect(res.body).toEqual(cachedBody);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/issues",
+      headers: { "X-Hive-Worker-Idempotency-Key": "key-replay-1" },
+      payload: { agentId, title: "From worker" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual(cachedBody);
     expect(svcMocks.createInTx).not.toHaveBeenCalled();
     expect(svcMocks.logActivity).not.toHaveBeenCalled();
+    await app.close();
   });
 
   it("POST /issues idempotency miss runs create flow", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(
-        mockDbIssueCreateWithIdempotency({
-          agentRow: { id: agentId, status: "active" },
-          idempotencyCached: null,
+    const app = await createRouteTestFastify({
+      plugin: (f) =>
+        workerApiPlugin(f, {
+          db: mockDbIssueCreateWithIdempotency({
+            agentRow: { id: agentId, status: "active" },
+            idempotencyCached: null,
+          }),
+          secretsStrictMode: false,
         }),
-      ),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    const res = await request(app)
-      .post("/api/worker-api/issues")
-      .set("X-Hive-Worker-Idempotency-Key", "key-fresh-1")
-      .send({ agentId, title: "From worker" })
-      .expect(201);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.result.issue.identifier).toBe("TST-1");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/issues",
+      headers: { "X-Hive-Worker-Idempotency-Key": "key-fresh-1" },
+      payload: { agentId, title: "From worker" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().result.issue.identifier).toBe("TST-1");
     expect(svcMocks.createInTx).toHaveBeenCalled();
     expect(svcMocks.logActivity).toHaveBeenCalled();
+    await app.close();
   });
 
   it("POST /agent-hires returns 201 for worker_instance", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    const res = await request(app)
-      .post("/api/worker-api/agent-hires")
-      .send({ agentId, name: "New hire" })
-      .expect(201);
-    expect(res.body.ok).toBe(true);
-    expect(res.body.result.agent.id).toBe("aaaaaaaa-e29b-41d4-a716-4466554400dd");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/agent-hires",
+      payload: { agentId, name: "New hire" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().ok).toBe(true);
+    expect(res.json().result.agent.id).toBe("aaaaaaaa-e29b-41d4-a716-4466554400dd");
+    await app.close();
   });
 
   it("POST /agent-hires returns 403 when acting agent lacks agents:create", async () => {
     issueHelperMocks.assertWorkerAgentCanCreateAgents.mockRejectedValueOnce(
       forbidden("Missing permission: can create agents"),
     );
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    await request(app).post("/api/worker-api/agent-hires").send({ agentId, name: "x" }).expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/agent-hires",
+      payload: { agentId, name: "x" },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("POST /agent-hires returns 201 with approval when company requires board approval", async () => {
@@ -439,16 +458,20 @@ describe("worker-api routes", () => {
       agent: { id: "bbbbbbbb-e29b-41d4-a716-4466554400ee", status: "pending_approval" },
       approval: { id: "cccccccc-e29b-41d4-a716-4466554400ff", status: "pending" },
     });
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    const res = await request(app)
-      .post("/api/worker-api/agent-hires")
-      .send({ agentId, name: "Needs approval" })
-      .expect(201);
-    expect(res.body.result.approval?.id).toBe("cccccccc-e29b-41d4-a716-4466554400ff");
-    expect(res.body.result.agent.status).toBe("pending_approval");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/worker-api/agent-hires",
+      payload: { agentId, name: "Needs approval" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().result.approval?.id).toBe("cccccccc-e29b-41d4-a716-4466554400ff");
+    expect(res.json().result.agent.status).toBe("pending_approval");
+    await app.close();
   });
 
   it("PATCH /issues/:id returns 200 for worker_instance", async () => {
@@ -459,16 +482,20 @@ describe("worker-api routes", () => {
       assigneeAgentId: null,
       createdByUserId: null,
     });
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    const res = await request(app)
-      .patch(`/api/worker-api/issues/${issueUuid}`)
-      .send({ agentId, title: "Updated" })
-      .expect(200);
-    expect(res.body.ok).toBe(true);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/worker-api/issues/${issueUuid}`,
+      payload: { agentId, title: "Updated" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
     expect(svcMocks.updateIssue).toHaveBeenCalled();
+    await app.close();
   });
 });
 
@@ -488,21 +515,18 @@ describe("worker-api prometheus metrics", () => {
   });
 
   it("records 2xx for successful cost-report", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
     const occurredAt = new Date().toISOString();
-    await request(app)
-      .post("/api/worker-api/cost-report")
-      .send({
-        agentId,
-        provider: "openai",
-        model: "gpt-4o",
-        costCents: 1,
-        occurredAt,
-      })
-      .expect(201);
+    await app.inject({
+      method: "POST",
+      url: "/api/worker-api/cost-report",
+      payload: { agentId, provider: "openai", model: "gpt-4o", costCents: 1, occurredAt },
+    });
+    await app.close();
     const scrape = await renderPlacementPrometheusScrape();
     expect(scrape?.body).toBeDefined();
     expect(scrape!.body).toContain("hive_worker_api_requests_total");
@@ -517,25 +541,34 @@ describe("worker-api prometheus metrics", () => {
       status: "in_progress",
       assigneeAgentId: agentId,
     });
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    await request(app)
-      .post(`/api/worker-api/issues/${issueUuid}/comments`)
-      .send({ agentId, body: "x" })
-      .expect(401);
+    await app.inject({
+      method: "POST",
+      url: `/api/worker-api/issues/${issueUuid}/comments`,
+      payload: { agentId, body: "x" },
+    });
+    await app.close();
     const scrape = await renderPlacementPrometheusScrape();
     expect(scrape!.body).toContain('route="issue_comment"');
     expect(scrape!.body).toContain('status_class="401"');
   });
 
   it("records issue_create for POST /issues", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(mockDbWithAgent({ id: agentId, status: "active" })),
+    const app = await createRouteTestFastify({
+      plugin: (f) => workerApiPlugin(f, { db: mockDbWithAgent({ id: agentId, status: "active" }), secretsStrictMode: false }),
+      prefix: "/api/worker-api",
       principal: principalWorkerInstance({ workerInstanceRowId: workerInstId, companyId: companyA }),
     });
-    await request(app).post("/api/worker-api/issues").send({ agentId, title: "x" }).expect(201);
+    await app.inject({
+      method: "POST",
+      url: "/api/worker-api/issues",
+      payload: { agentId, title: "x" },
+    });
+    await app.close();
     const scrape = await renderPlacementPrometheusScrape();
     expect(scrape!.body).toContain('route="issue_create"');
     expect(scrape!.body).toContain('status_class="2xx"');

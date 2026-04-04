@@ -1,1 +1,1 @@
-export { companyRoutes } from "./company-routes.js";
+export { companiesPlugin } from "./company-routes.js";

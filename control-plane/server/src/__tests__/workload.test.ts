@@ -1,9 +1,9 @@
-import express from "express";
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@hive/db";
+import type { Principal } from "@hive/shared";
 import { notFound } from "../errors.js";
-import { errorHandler } from "../middleware/error-handler.js";
-import { workloadRoutes } from "../routes/workload.js";
+import { createRouteTestFastify } from "./helpers/route-app.js";
+import { workloadPlugin } from "../routes/workload.js";
 
 const getWorkloadMock = vi.fn();
 
@@ -11,27 +11,7 @@ vi.mock("../services/workload.js", () => ({
   workloadService: () => ({ getWorkload: getWorkloadMock }),
 }));
 
-function createApp(actor: {
-  type: "board" | "agent";
-  userId?: string;
-  agentId?: string;
-  companyId?: string;
-  source?: string;
-}) {
-  const app = express();
-  app.use((req, _res, next) => {
-    req.principal =
-      actor.type === "board"
-        ? (actor.source === "session"
-          ? { type: "user", id: actor.userId ?? "board", company_ids: [], roles: [] }
-          : { type: "system", id: actor.userId ?? "board", roles: [] })
-        : { type: "agent", id: actor.agentId ?? "agent-1", company_id: actor.companyId ?? "company-A", roles: [] };
-    next();
-  });
-  app.use(workloadRoutes({} as any));
-  app.use(errorHandler);
-  return app;
-}
+const db = {} as unknown as Db;
 
 const companyA = "550e8400-e29b-41d4-a716-446655440000";
 
@@ -98,66 +78,90 @@ const pauseWorkload = {
   },
 };
 
-describe("GET /companies/:companyId/workload", () => {
+const boardPrincipal: Principal = { type: "system", id: "board", roles: [] };
+
+describe("GET /api/companies/:companyId/workload", () => {
   beforeEach(() => {
     getWorkloadMock.mockReset();
   });
 
   it("returns 200 with normal recommendation under light load", async () => {
     getWorkloadMock.mockResolvedValueOnce(normalWorkload);
-    const app = createApp({ type: "board" });
-    const res = await request(app).get(`/companies/${companyA}/workload`);
-    expect(res.status).toBe(200);
-    expect(res.body.recommendation.action).toBe("normal");
-    expect(res.body.recommendation.submit_ok).toBe(true);
-    expect(res.body.companyId).toBe(companyA);
-    expect(res.body.capacity).toBeDefined();
-    expect(res.body.queue).toBeDefined();
-    expect(res.body.agents).toBeDefined();
-    expect(res.body.thresholds).toBeDefined();
+    const app = await createRouteTestFastify({
+      plugin: (f) => workloadPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/workload` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().recommendation.action).toBe("normal");
+    expect(res.json().recommendation.submit_ok).toBe(true);
+    expect(res.json().companyId).toBe(companyA);
+    expect(res.json().capacity).toBeDefined();
+    expect(res.json().queue).toBeDefined();
+    expect(res.json().agents).toBeDefined();
+    expect(res.json().thresholds).toBeDefined();
+    await app.close();
   });
 
   it("returns 200 with pause recommendation when no agents online", async () => {
     getWorkloadMock.mockResolvedValueOnce(pauseWorkload);
-    const app = createApp({ type: "board" });
-    const res = await request(app).get(`/companies/${companyA}/workload`);
-    expect(res.status).toBe(200);
-    expect(res.body.recommendation.action).toBe("pause");
-    expect(res.body.recommendation.submit_ok).toBe(false);
+    const app = await createRouteTestFastify({
+      plugin: (f) => workloadPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/workload` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().recommendation.action).toBe("pause");
+    expect(res.json().recommendation.submit_ok).toBe(false);
+    await app.close();
   });
 
   it("returns 404 when company does not exist", async () => {
     getWorkloadMock.mockRejectedValueOnce(notFound("Company not found"));
-    const app = createApp({ type: "board" });
-    const res = await request(app).get(`/companies/${companyA}/workload`);
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe("Company not found");
+    const app = await createRouteTestFastify({
+      plugin: (f) => workloadPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/workload` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("Company not found");
+    await app.close();
   });
 
   it("returns 403 when agent key calls with another company id", async () => {
-    const app = createApp({
+    const principal: Principal = {
       type: "agent",
-      agentId: "agent-1",
-      companyId: "company-A",
+      id: "agent-1",
+      company_id: "company-A",
+      roles: [],
+    };
+    const app = await createRouteTestFastify({
+      plugin: (f) => workloadPlugin(f, { db }),
+      principal,
     });
     const otherCompanyId = "660e8400-e29b-41d4-a716-446655440001";
-    const res = await request(app).get(
-      `/companies/${otherCompanyId}/workload`,
-    );
-    expect(res.status).toBe(403);
+    const res = await app.inject({ method: "GET", url: `/api/companies/${otherCompanyId}/workload` });
+    expect(res.statusCode).toBe(403);
     expect(getWorkloadMock).not.toHaveBeenCalled();
+    await app.close();
   });
 
   it("returns 200 when agent key calls with own company id", async () => {
     getWorkloadMock.mockResolvedValueOnce(normalWorkload);
-    const app = createApp({
+    const principal: Principal = {
       type: "agent",
-      agentId: "agent-1",
-      companyId: companyA,
+      id: "agent-1",
+      company_id: companyA,
+      roles: [],
+    };
+    const app = await createRouteTestFastify({
+      plugin: (f) => workloadPlugin(f, { db }),
+      principal,
     });
-    const res = await request(app).get(`/companies/${companyA}/workload`);
-    expect(res.status).toBe(200);
-    expect(res.body.companyId).toBe(companyA);
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/workload` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().companyId).toBe(companyA);
     expect(getWorkloadMock).toHaveBeenCalledWith(companyA);
+    await app.close();
   });
 });

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import type { ApprovalServiceAdapterDeps } from "../../services/approvals.js";
 import {
@@ -18,27 +18,26 @@ import {
   validateAdapterConfig,
 } from "../../adapters/index.js";
 import {
-  assertCanCreateAgentsForCompany,
-  normalizeAgentReference,
   type AgentRoutesCommonDeps,
 } from "./common.js";
-import { registerAgentListGetRoutes } from "./list-get.js";
-import { registerAgentKeysRoutes } from "./keys.js";
-import { registerAgentRunsRoutes } from "./runs.js";
-import { registerAgentWorkerPairingRoutes } from "./pairing-routes.js";
-import { registerAgentAdaptersRoutes } from "./adapters-routes.js";
-import { registerAgentCrudRoutes } from "./crud-routes.js";
-import { registerAgentRuntimeRoutes } from "./runtime-routes.js";
+import { registerAgentListGetRoutesF } from "./list-get.js";
+import { registerAgentKeysRoutesF } from "./keys.js";
+import { registerAgentRunsRoutesF } from "./runs.js";
+import { registerAgentWorkerPairingRoutesF } from "./pairing-routes.js";
+import { registerAgentAdaptersRoutesF } from "./adapters-routes.js";
+import { registerAgentCrudRoutesF } from "./crud-routes.js";
+import { registerAgentRuntimeRoutesF } from "./runtime-routes.js";
 import { workerPairingService } from "../../services/worker-pairing.js";
-import { workerPairingPublicRoutes } from "../worker-pairing-public.js";
 import { getActorInfo } from "../authz.js";
 
-export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
-  const router = Router();
+export async function agentsPlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; strictSecretsMode: boolean },
+): Promise<void> {
+  const { db, strictSecretsMode } = opts;
   const svc = agentService(db);
   const access = accessService(db);
   const secretsSvc = secretService(db);
-  const strictSecretsMode = opts.strictSecretsMode;
   const approvalAdapterDeps: ApprovalServiceAdapterDeps = {
     secretService: secretsSvc,
     assertAdapterTypeAllowed,
@@ -51,27 +50,13 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
   const issueSvc = issueService(db);
   const activitySvc = activityService(db);
   const costSvc = costService(db);
-
   const commonDeps: AgentRoutesCommonDeps = { db, access, agentService: svc };
-
-  router.param("id", async (req, _res, next, rawId) => {
-    try {
-      req.params.id = await normalizeAgentReference(req, String(rawId), commonDeps);
-      next();
-    } catch (err) {
-      next(err);
-    }
-  });
-
   const logActivityBound = (input: Parameters<typeof logActivity>[1]) => logActivity(db, input);
-
   const pairingSvc = workerPairingService(db, {
     mintEnrollment: (agentId, ttl) => svc.createLinkEnrollmentToken(agentId, ttl),
   });
 
-  router.use(workerPairingPublicRoutes(pairingSvc));
-
-  registerAgentListGetRoutes(router, {
+  registerAgentListGetRoutesF(fastify, {
     ...commonDeps,
     heartbeatService: heartbeat,
     activityService: activitySvc,
@@ -80,21 +65,21 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
     logActivity: logActivityBound,
   });
 
-  registerAgentKeysRoutes(router, {
+  registerAgentKeysRoutesF(fastify, {
     db,
     agentService: svc,
     getActorInfo,
     logActivity: logActivityBound,
   });
 
-  registerAgentWorkerPairingRoutes(router, {
+  registerAgentWorkerPairingRoutesF(fastify, {
     db,
     agentService: svc,
     pairingSvc,
     logActivityBound,
   });
 
-  registerAgentRunsRoutes(router, {
+  registerAgentRunsRoutesF(fastify, {
     db,
     heartbeatService: heartbeat,
     agentService: svc,
@@ -102,14 +87,14 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
     logActivity: logActivityBound,
   });
 
-  registerAgentAdaptersRoutes(router, {
+  registerAgentAdaptersRoutesF(fastify, {
     db,
     secretsSvc,
     strictSecretsMode,
     commonDeps,
   });
 
-  registerAgentCrudRoutes(router, {
+  registerAgentCrudRoutesF(fastify, {
     db,
     svc,
     secretsSvc,
@@ -120,11 +105,9 @@ export function agentRoutes(db: Db, opts: { strictSecretsMode: boolean }) {
     heartbeat,
   });
 
-  registerAgentRuntimeRoutes(router, {
+  registerAgentRuntimeRoutesF(fastify, {
     db,
     svc,
     heartbeat,
   });
-
-  return router;
 }

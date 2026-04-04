@@ -3,7 +3,6 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import detectPort from "detect-port";
-import type { Request as ExpressRequest } from "express";
 import { createFastifyApp } from "./fastify-app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
@@ -61,20 +60,15 @@ export async function startServer(): Promise<StartedServer> {
   startupDbInfo = dbBootstrap.startupDbInfo;
 
   let authReady = config.deploymentMode === "local_trusted";
-  let resolveSession:
-    | ((req: ExpressRequest) => Promise<BetterAuthSessionResult | null>)
-    | undefined;
   let resolveSessionFromHeaders:
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
     | undefined;
-  let principalResolver: (req: ExpressRequest) => Promise<import("@hive/shared").Principal | null>;
 
   const authBootstrap = await bootstrapAuth(config, db);
   authReady = authBootstrap.authReady;
   const betterAuthInstance = authBootstrap.betterAuthInstance;
-  resolveSession = authBootstrap.resolveSession;
   resolveSessionFromHeaders = authBootstrap.resolveSessionFromHeaders;
-  principalResolver = authBootstrap.principalResolver;
+  const principalResolver = authBootstrap.principalResolver;
 
   const listenPort = await detectPort(config.port);
   const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
@@ -125,7 +119,6 @@ export async function startServer(): Promise<StartedServer> {
   const fastifyApp = await createFastifyApp(db, {
     ...appOpts,
     betterAuthInstance,
-    resolveSession,
     resolveSessionFromHeaders,
   });
   await fastifyApp.ready();
@@ -158,7 +151,7 @@ export async function startServer(): Promise<StartedServer> {
     server.once("error", onError);
     server.listen(listenPort, config.host, () => {
       server.off("error", onError);
-      logger.info(`Server listening on ${config.host}:${listenPort}`);
+      logger.info({ framework: "fastify", host: config.host, port: listenPort }, "Server listening");
       if (hiveEnv("OPEN_ON_LISTEN") === "true") {
         const openHost = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
         const url = `http://${openHost}:${listenPort}`;

@@ -1,7 +1,7 @@
-import { Router, type Request } from "express";
+/// <reference path="../types/fastify.d.ts" />
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { AGENT_ICON_NAMES } from "@hive/shared";
-import { getCurrentPrincipal } from "../auth/principal.js";
 import { forbidden } from "../errors.js";
 import { listServerAdapters } from "../adapters/index.js";
 import { agentService } from "../services/agents.js";
@@ -11,12 +11,11 @@ function hasCreatePermission(agent: { role: string; permissions: Record<string, 
   return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
 }
 
-export function llmRoutes(db: Db) {
-  const router = Router();
-  const agentsSvc = agentService(db);
+export async function llmPlugin(fastify: FastifyInstance, opts: { db: Db }): Promise<void> {
+  const agentsSvc = agentService(opts.db);
 
-  async function assertCanRead(req: Request) {
-    const p = getCurrentPrincipal(req);
+  async function assertCanRead(fastifyReq: import("fastify").FastifyRequest) {
+    const p = fastifyReq.principal ?? null;
     if (p?.type === "user" || p?.type === "system") return;
     if (p?.type !== "agent" || !p.id) {
       throw forbidden("Board or permitted agent authentication required");
@@ -27,7 +26,7 @@ export function llmRoutes(db: Db) {
     }
   }
 
-  router.get("/llms/agent-configuration.txt", async (req, res) => {
+  fastify.get("/llms/agent-configuration.txt", async (req, reply) => {
     await assertCanRead(req);
     const adapters = listServerAdapters().sort((a, b) => a.type.localeCompare(b.type));
     const lines = [
@@ -49,10 +48,10 @@ export function llmRoutes(db: Db) {
       "- New hires may be created in pending_approval state depending on company settings.",
       "",
     ];
-    res.type("text/plain").send(lines.join("\n"));
+    return reply.type("text/plain").send(lines.join("\n"));
   });
 
-  router.get("/llms/agent-icons.txt", async (req, res) => {
+  fastify.get("/llms/agent-icons.txt", async (req, reply) => {
     await assertCanRead(req);
     const lines = [
       "# Hive Agent Icon Names",
@@ -64,24 +63,24 @@ export function llmRoutes(db: Db) {
       '{ "name": "SearchOps", "role": "researcher", "icon": "search" }',
       "",
     ];
-    res.type("text/plain").send(lines.join("\n"));
+    return reply.type("text/plain").send(lines.join("\n"));
   });
 
-  router.get("/llms/agent-configuration/:adapterType.txt", async (req, res) => {
-    await assertCanRead(req);
-    const adapterType = req.params.adapterType as string;
-    const adapter = listServerAdapters().find((entry) => entry.type === adapterType);
-    if (!adapter) {
-      res.status(404).type("text/plain").send(`Unknown adapter type: ${adapterType}`);
-      return;
-    }
-    res
-      .type("text/plain")
-      .send(
-        adapter.agentConfigurationDoc ??
-          `# ${adapterType} agent configuration\n\nNo adapter-specific documentation registered.`,
-      );
-  });
-
-  return router;
+  fastify.get<{ Params: { adapterType: string } }>(
+    "/llms/agent-configuration/:adapterType.txt",
+    async (req, reply) => {
+      await assertCanRead(req);
+      const { adapterType } = req.params;
+      const adapter = listServerAdapters().find((entry) => entry.type === adapterType);
+      if (!adapter) {
+        return reply.status(404).type("text/plain").send(`Unknown adapter type: ${adapterType}`);
+      }
+      return reply
+        .type("text/plain")
+        .send(
+          adapter.agentConfigurationDoc ??
+            `# ${adapterType} agent configuration\n\nNo adapter-specific documentation registered.`,
+        );
+    },
+  );
 }

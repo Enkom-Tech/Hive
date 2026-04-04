@@ -1,9 +1,8 @@
-import express from "express";
-import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { internalHiveTrainingCallbackRoutes } from "../routes/internal-hive.js";
+import type { FastifyInstance } from "fastify";
+import { internalHiveTrainingCallbackPlugin } from "../routes/internal-hive.js";
 import { hashTrainingCallbackToken } from "../services/model-training.js";
-import { errorHandler } from "../middleware/error-handler.js";
+import { createRouteTestFastify } from "./helpers/route-app.js";
 
 describe("internal model-training-callback", () => {
   it("returns 403 when bearer does not match run token or operator secret", async () => {
@@ -47,25 +46,22 @@ describe("internal model-training-callback", () => {
       })),
     } as unknown as import("@hive/db").Db;
 
-    const app = express();
-    app.use(express.json());
-    app.use(
-      "/internal/hive",
-      internalHiveTrainingCallbackRoutes(db, { internalOperatorSecret: "operator-secret" }),
-    );
-    app.use(errorHandler);
+    const app: FastifyInstance = await createRouteTestFastify({
+      plugin: async (fastify) => {
+        await internalHiveTrainingCallbackPlugin(fastify, { db, internalOperatorSecret: "operator-secret" });
+      },
+    });
 
-    const res = await request(app)
-      .post("/internal/hive/model-training-callback")
-      .set("Authorization", "Bearer wrong-token")
-      .send({
-        runId,
-        status: "running",
-        resultMetadata: {},
-      })
-      .expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/hive/model-training-callback",
+      headers: { authorization: "Bearer wrong-token" },
+      payload: { runId, status: "running", resultMetadata: {} },
+    });
 
-    expect(String(res.body?.error ?? res.text)).toMatch(/authorization/i);
+    expect(res.statusCode).toBe(403);
+    expect(String(res.json()?.error ?? res.body)).toMatch(/authorization/i);
+    await app.close();
   });
 
   it("accepts operator secret for callback", async () => {
@@ -141,25 +137,22 @@ describe("internal model-training-callback", () => {
       })),
     } as unknown as import("@hive/db").Db;
 
-    const app = express();
-    app.use(express.json());
-    app.use(
-      "/internal/hive",
-      internalHiveTrainingCallbackRoutes(db, { internalOperatorSecret: "operator-secret" }),
-    );
-    app.use(errorHandler);
+    const app: FastifyInstance = await createRouteTestFastify({
+      plugin: async (fastify) => {
+        await internalHiveTrainingCallbackPlugin(fastify, { db, internalOperatorSecret: "operator-secret" });
+      },
+    });
 
-    const res = await request(app)
-      .post("/internal/hive/model-training-callback")
-      .set("Authorization", "Bearer operator-secret")
-      .send({
-        runId,
-        status: "running",
-        resultMetadata: {},
-      })
-      .expect(200);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/hive/model-training-callback",
+      headers: { authorization: "Bearer operator-secret" },
+      payload: { runId, status: "running", resultMetadata: {} },
+    });
 
-    expect(res.body.status).toBe("running");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("running");
+    await app.close();
   });
 
   it("duplicate identical callback does not invoke update twice (idempotent digest)", async () => {
@@ -213,26 +206,32 @@ describe("internal model-training-callback", () => {
       })),
     } as unknown as import("@hive/db").Db;
 
-    const app = express();
-    app.use(express.json());
-    app.use("/internal/hive", internalHiveTrainingCallbackRoutes(db, {}));
-    app.use(errorHandler);
+    const app: FastifyInstance = await createRouteTestFastify({
+      plugin: async (fastify) => {
+        await internalHiveTrainingCallbackPlugin(fastify, { db });
+      },
+    });
 
     const body = { runId, status: "running" as const, resultMetadata: {} };
 
-    await request(app)
-      .post("/internal/hive/model-training-callback")
-      .set("Authorization", `Bearer ${tokenPlain}`)
-      .send(body)
-      .expect(200);
+    const res1 = await app.inject({
+      method: "POST",
+      url: "/api/internal/hive/model-training-callback",
+      headers: { authorization: `Bearer ${tokenPlain}` },
+      payload: body,
+    });
+    expect(res1.statusCode).toBe(200);
 
-    await request(app)
-      .post("/internal/hive/model-training-callback")
-      .set("Authorization", `Bearer ${tokenPlain}`)
-      .send(body)
-      .expect(200);
+    const res2 = await app.inject({
+      method: "POST",
+      url: "/api/internal/hive/model-training-callback",
+      headers: { authorization: `Bearer ${tokenPlain}` },
+      payload: body,
+    });
+    expect(res2.statusCode).toBe(200);
 
     expect(updateSpy).toHaveBeenCalledTimes(1);
     expect(run.lastCallbackDigest).toBeTruthy();
+    await app.close();
   });
 });

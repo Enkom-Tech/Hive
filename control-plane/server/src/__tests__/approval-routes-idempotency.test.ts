@@ -1,8 +1,8 @@
-import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { approvalRoutes } from "../routes/approvals.js";
-import { errorHandler } from "../middleware/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
+import type { Db } from "@hive/db";
+import { approvalsPlugin } from "../routes/approvals.js";
+import { createRouteTestFastify, principalBoard } from "./helpers/route-app.js";
 
 const mockApprovalService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -39,24 +39,9 @@ vi.mock("../services/index.js", () => ({
   secretService: () => mockSecretService,
 }));
 
-function createApp() {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).principal = {
-      type: "user",
-      id: "user-1",
-      company_ids: ["company-1"],
-      roles: [],
-    };
-    next();
-  });
-  app.use("/api", approvalRoutes({} as any, false));
-  app.use(errorHandler);
-  return app;
-}
-
 describe("approval routes idempotent retries", () => {
+  let app: FastifyInstance;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockApprovalService.getById.mockResolvedValue({
@@ -72,6 +57,10 @@ describe("approval routes idempotent retries", () => {
     mockLogActivity.mockResolvedValue(undefined);
   });
 
+  afterEach(async () => {
+    await app?.close();
+  });
+
   it("does not emit duplicate approval side effects when approve is already resolved", async () => {
     mockApprovalService.approve.mockResolvedValue({
       approval: {
@@ -85,11 +74,18 @@ describe("approval routes idempotent retries", () => {
       applied: false,
     });
 
-    const res = await request(createApp())
-      .post("/api/approvals/approval-1/approve")
-      .send({});
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => approvalsPlugin(fastify, { db: {} as Db, strictSecretsMode: false }),
+      principal: principalBoard({ companyIds: ["company-1"] }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/approvals/approval-1/approve",
+      payload: {},
+      headers: { "content-type": "application/json" },
+    });
 
-    expect(res.status).toBe(200);
+    expect(res.statusCode).toBe(200);
     expect(mockIssueApprovalService.listIssuesForApproval).not.toHaveBeenCalled();
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
@@ -107,11 +103,18 @@ describe("approval routes idempotent retries", () => {
       applied: false,
     });
 
-    const res = await request(createApp())
-      .post("/api/approvals/approval-1/reject")
-      .send({});
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => approvalsPlugin(fastify, { db: {} as Db, strictSecretsMode: false }),
+      principal: principalBoard({ companyIds: ["company-1"] }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/approvals/approval-1/reject",
+      payload: {},
+      headers: { "content-type": "application/json" },
+    });
 
-    expect(res.status).toBe(200);
+    expect(res.statusCode).toBe(200);
     expect(mockLogActivity).not.toHaveBeenCalled();
   });
 });

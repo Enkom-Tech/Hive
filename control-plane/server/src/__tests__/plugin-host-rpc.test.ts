@@ -1,8 +1,7 @@
-import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
-import { errorHandler } from "../middleware/index.js";
+import { createRouteTestFastify } from "./helpers/route-app.js";
 
 const getInstanceForRpc = vi.fn();
 const parseCapabilitiesJson = vi.fn((raw: string) => {
@@ -22,52 +21,62 @@ vi.mock("../services/plugins.js", () => ({
   }),
 }));
 
-import { pluginHostRoutes } from "../routes/plugin-host.js";
+import { pluginHostPlugin } from "../routes/plugin-host.js";
 
 const instanceId = "00000000-0000-4000-8000-000000000042";
 
 describe("plugin host RPC", () => {
   const db = {} as unknown as Db;
+  let app: FastifyInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  async function buildApp(): Promise<FastifyInstance> {
+    return createRouteTestFastify({
+      plugin: async (fastify) => {
+        await pluginHostPlugin(fastify, { db, hostSecret: "secret" });
+      },
+    });
+  }
+
   it("rejects missing bearer token", async () => {
-    const app = express();
-    app.use(express.json());
-    app.use("/internal/plugin-host", pluginHostRoutes(db, { hostSecret: "secret" }));
-    app.use(errorHandler);
-    const res = await request(app)
-      .post("/internal/plugin-host/rpc")
-      .send({ instanceId, method: "ping" });
-    expect(res.status).toBe(401);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/plugin-host/rpc",
+      payload: { instanceId, method: "ping" },
+    });
+    expect(res.statusCode).toBe(401);
   });
 
   it("rejects wrong bearer token", async () => {
-    const app = express();
-    app.use(express.json());
-    app.use("/internal/plugin-host", pluginHostRoutes(db, { hostSecret: "secret" }));
-    app.use(errorHandler);
-    const res = await request(app)
-      .post("/internal/plugin-host/rpc")
-      .set("Authorization", "Bearer wrong")
-      .send({ instanceId, method: "ping" });
-    expect(res.status).toBe(401);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/plugin-host/rpc",
+      headers: { authorization: "Bearer wrong" },
+      payload: { instanceId, method: "ping" },
+    });
+    expect(res.statusCode).toBe(401);
   });
 
   it("returns 404 when plugin instance is missing", async () => {
     getInstanceForRpc.mockResolvedValue(null);
-    const app = express();
-    app.use(express.json());
-    app.use("/internal/plugin-host", pluginHostRoutes(db, { hostSecret: "secret" }));
-    app.use(errorHandler);
-    const res = await request(app)
-      .post("/internal/plugin-host/rpc")
-      .set("Authorization", "Bearer secret")
-      .send({ instanceId, method: "ping" });
-    expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ ok: false });
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/plugin-host/rpc",
+      headers: { authorization: "Bearer secret" },
+      payload: { instanceId, method: "ping" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false });
   });
 
   it("returns 404 when plugin instance is disabled", async () => {
@@ -77,15 +86,14 @@ describe("plugin host RPC", () => {
       capabilitiesJson: '["rpc.ping"]',
       deploymentId: "d1",
     });
-    const app = express();
-    app.use(express.json());
-    app.use("/internal/plugin-host", pluginHostRoutes(db, { hostSecret: "secret" }));
-    app.use(errorHandler);
-    const res = await request(app)
-      .post("/internal/plugin-host/rpc")
-      .set("Authorization", "Bearer secret")
-      .send({ instanceId, method: "ping" });
-    expect(res.status).toBe(404);
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/plugin-host/rpc",
+      headers: { authorization: "Bearer secret" },
+      payload: { instanceId, method: "ping" },
+    });
+    expect(res.statusCode).toBe(404);
   });
 
   it("returns 403 when rpc.ping capability is missing", async () => {
@@ -95,16 +103,15 @@ describe("plugin host RPC", () => {
       capabilitiesJson: "[]",
       deploymentId: "d1",
     });
-    const app = express();
-    app.use(express.json());
-    app.use("/internal/plugin-host", pluginHostRoutes(db, { hostSecret: "secret" }));
-    app.use(errorHandler);
-    const res = await request(app)
-      .post("/internal/plugin-host/rpc")
-      .set("Authorization", "Bearer secret")
-      .send({ instanceId, method: "ping" });
-    expect(res.status).toBe(403);
-    expect(res.body).toMatchObject({ ok: false, error: "Missing rpc.ping capability" });
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/plugin-host/rpc",
+      headers: { authorization: "Bearer secret" },
+      payload: { instanceId, method: "ping" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: "Missing rpc.ping capability" });
   });
 
   it("returns 200 ping when token, instance, and capability are valid", async () => {
@@ -114,15 +121,14 @@ describe("plugin host RPC", () => {
       capabilitiesJson: '["rpc.ping"]',
       deploymentId: "d1",
     });
-    const app = express();
-    app.use(express.json());
-    app.use("/internal/plugin-host", pluginHostRoutes(db, { hostSecret: "secret" }));
-    app.use(errorHandler);
-    const res = await request(app)
-      .post("/internal/plugin-host/rpc")
-      .set("Authorization", "Bearer secret")
-      .send({ instanceId, method: "ping" });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, method: "ping" });
+    app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/plugin-host/rpc",
+      headers: { authorization: "Bearer secret" },
+      payload: { instanceId, method: "ping" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, method: "ping" });
   });
 });

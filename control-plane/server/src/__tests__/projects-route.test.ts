@@ -1,8 +1,7 @@
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@hive/db";
-import { createRouteTestApp, actorBoard, actorAgent } from "./helpers/route-app.js";
-import { projectRoutes } from "../routes/projects.js";
+import { createRouteTestFastify, actorBoard, actorAgent } from "./helpers/route-app.js";
+import { projectsPlugin } from "../routes/projects.js";
 
 const mockProjectService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -37,102 +36,117 @@ describe("projects route", () => {
   describe("GET /api/companies/:companyId/projects", () => {
     it("returns 200 with list when board has company access", async () => {
       mockProjectService.list.mockResolvedValue([projectPayload]);
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app).get(`/api/companies/${company1}/projects`);
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual([projectPayload]);
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/projects` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([projectPayload]);
       expect(mockProjectService.list).toHaveBeenCalledWith(company1);
+      await app.close();
     });
 
     it("returns 403 when agent calls with another company", async () => {
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorAgent(company2),
       });
-      const res = await request(app).get(`/api/companies/${company1}/projects`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
-      expect(res.body.error).toContain("another company");
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/projects` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
+      expect(res.json().error).toContain("another company");
       expect(mockProjectService.list).not.toHaveBeenCalled();
+      await app.close();
     });
 
     it("returns 403 when board user has no access to company", async () => {
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorBoard([company2]),
       });
-      const res = await request(app).get(`/api/companies/${company1}/projects`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/projects` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
       expect(mockProjectService.list).not.toHaveBeenCalled();
+      await app.close();
     });
   });
 
   describe("GET /api/projects/:id", () => {
     it("returns 200 with project when found and actor has access", async () => {
       mockProjectService.getById.mockResolvedValue(projectPayload);
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app).get(`/api/projects/${projectId}`);
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(projectPayload);
+      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(projectPayload);
       expect(mockProjectService.getById).toHaveBeenCalledWith(projectId);
+      await app.close();
     });
 
     it("returns 404 when project not found", async () => {
       mockProjectService.getById.mockResolvedValue(null);
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app).get(`/api/projects/${projectId}`);
-      expect(res.status).toBe(404);
-      expect(res.body).toMatchObject({ error: "Project not found" });
+      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}` });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ error: "Project not found" });
+      await app.close();
     });
 
     it("returns 403 when project belongs to company actor cannot access", async () => {
       mockProjectService.getById.mockResolvedValue(projectPayload);
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorBoard([company2]),
       });
-      const res = await request(app).get(`/api/projects/${projectId}`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
+      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
+      await app.close();
     });
   });
 
   describe("POST /api/companies/:companyId/projects", () => {
     it("returns 201 with created project on success", async () => {
       mockProjectService.create.mockResolvedValue(projectPayload);
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app)
-        .post(`/api/companies/${company1}/projects`)
-        .send({ name: "New Project", status: "backlog" });
-      expect(res.status).toBe(201);
-      expect(res.body).toEqual(projectPayload);
-      expect(mockProjectService.create).toHaveBeenCalledWith(company1, expect.objectContaining({ name: "New Project", status: "backlog" }));
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/companies/${company1}/projects`,
+        payload: { name: "New Project", status: "backlog" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toEqual(projectPayload);
+      expect(mockProjectService.create).toHaveBeenCalledWith(
+        company1,
+        expect.objectContaining({ name: "New Project", status: "backlog" }),
+      );
       expect(mockLogActivity).toHaveBeenCalled();
+      await app.close();
     });
 
     it("returns 403 when agent calls with another company", async () => {
-      const app = createRouteTestApp({
-        router: projectRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => projectsPlugin(f, { db }),
         principal: actorAgent(company2),
       });
-      const res = await request(app)
-        .post(`/api/companies/${company1}/projects`)
-        .send({ name: "New Project", status: "backlog" });
-      expect(res.status).toBe(403);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/companies/${company1}/projects`,
+        payload: { name: "New Project", status: "backlog" },
+      });
+      expect(res.statusCode).toBe(403);
       expect(mockProjectService.create).not.toHaveBeenCalled();
+      await app.close();
     });
   });
 });

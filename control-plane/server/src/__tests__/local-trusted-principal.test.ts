@@ -1,4 +1,4 @@
-import type { Request } from "express";
+import type { FastifyRequest } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePrincipalBuiltin } from "../auth/resolvers/builtin.js";
 import { isLocalImplicit } from "../auth/principal.js";
@@ -14,7 +14,7 @@ describe("resolvePrincipalBuiltin local_trusted", () => {
       })),
     } as unknown as import("@hive/db").Db;
 
-    const req = { header: vi.fn(() => undefined) } as unknown as Request;
+    const req = { headers: {} } as unknown as FastifyRequest;
     const p = await resolvePrincipalBuiltin(req, {
       db,
       deploymentMode: "local_trusted",
@@ -30,14 +30,14 @@ describe("isLocalImplicit", () => {
   it("is true for local-board user principal", () => {
     const req = {
       principal: { type: "user" as const, id: LOCAL_BOARD_USER_ID, roles: ["instance_admin"] },
-    } as Request;
+    };
     expect(isLocalImplicit(req)).toBe(true);
   });
 
   it("is true for legacy system principal", () => {
     const req = {
       principal: { type: "system" as const, id: "local-board", roles: ["instance_admin"] },
-    } as Request;
+    };
     expect(isLocalImplicit(req)).toBe(true);
   });
 });

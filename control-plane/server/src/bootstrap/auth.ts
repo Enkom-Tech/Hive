@@ -1,9 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { authUsers, companies, companyMemberships, instanceUserRoles } from "@hive/db";
-import type { Request, RequestHandler } from "express";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
-import type { PrincipalResolver } from "../middleware/auth.js";
+import type { FastifyPrincipalResolver } from "../middleware/auth.js";
 import type { Config } from "../config.js";
 import { logger } from "../middleware/logger.js";
 import { initializeBoardClaimChallenge } from "../board-claim.js";
@@ -77,14 +76,12 @@ async function ensureLocalTrustedBoardPrincipal(db: Db): Promise<void> {
 
 export interface BootstrapAuthResult {
   authReady: boolean;
-  betterAuthHandler: RequestHandler | undefined;
-  /** Raw Better Auth instance (for Fastify integration which handles the handler itself). */
+  /** Raw Better Auth instance (used by Fastify integration to handle auth routes). */
   betterAuthInstance: unknown;
-  resolveSession: ((req: Request) => Promise<BetterAuthSessionResult | null>) | undefined;
   resolveSessionFromHeaders:
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
     | undefined;
-  principalResolver: PrincipalResolver;
+  principalResolver: FastifyPrincipalResolver;
 }
 
 export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAuthResult> {
@@ -114,11 +111,7 @@ export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAu
   }
 
   let authReady = config.deploymentMode === "local_trusted";
-  let betterAuthHandler: RequestHandler | undefined;
   let betterAuthInstance: unknown;
-  let resolveSession:
-    | ((req: Request) => Promise<BetterAuthSessionResult | null>)
-    | undefined;
   let resolveSessionFromHeaders:
     | ((headers: Headers) => Promise<BetterAuthSessionResult | null>)
     | undefined;
@@ -129,10 +122,8 @@ export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAu
 
   if (config.deploymentMode === "authenticated") {
     const {
-      createBetterAuthHandler,
       createBetterAuthInstance,
       deriveAuthTrustedOrigins,
-      resolveBetterAuthSession,
       resolveBetterAuthSessionFromHeaders,
     } = await import("../auth/better-auth.js");
 
@@ -154,8 +145,6 @@ export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAu
 
     const auth = createBetterAuthInstance(db, config, effectiveTrustedOrigins);
     betterAuthInstance = auth;
-    betterAuthHandler = createBetterAuthHandler(auth);
-    resolveSession = (req) => resolveBetterAuthSession(auth, req);
     resolveSessionFromHeaders = (headers) => resolveBetterAuthSessionFromHeaders(auth, headers);
     await initializeBoardClaimChallenge(db, { deploymentMode: config.deploymentMode });
     authReady = true;
@@ -166,18 +155,16 @@ export async function bootstrapAuth(config: Config, db: Db): Promise<BootstrapAu
   }
 
   const { resolvePrincipalBuiltin } = await import("../auth/resolvers/builtin.js");
-  const principalResolver: PrincipalResolver = (req) =>
+  const principalResolver: FastifyPrincipalResolver = (req) =>
     resolvePrincipalBuiltin(req, {
       db,
       deploymentMode: config.deploymentMode,
-      resolveSession: resolveSession ?? undefined,
+      resolveSessionFromHeaders: resolveSessionFromHeaders ?? undefined,
     });
 
   return {
     authReady,
-    betterAuthHandler,
     betterAuthInstance,
-    resolveSession,
     resolveSessionFromHeaders,
     principalResolver,
   };

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import type { Db } from "@hive/db";
 import { and, count, eq, gt, isNull, sql } from "drizzle-orm";
 import { authUsers, instanceUserRoles, invites } from "@hive/db";
@@ -68,27 +68,19 @@ export async function collectHealthPayload(db: Db, opts: HealthRouteOptions): Pr
   };
 }
 
-export function healthRoutes(
-  db?: Db,
-  opts: HealthRouteOptions = {
-    deploymentMode: "local_trusted",
-    deploymentExposure: "private",
-    authReady: true,
-    companyDeletionEnabled: true,
-    authDisableSignUp: false,
-  },
-) {
-  const router = Router();
-
-  router.get("/", async (_req, res) => {
-    if (!db) {
-      res.json({ status: "ok" });
-      return;
+/**
+ * Fastify-native health plugin.
+ * Registers GET /health — replaces the Express healthRoutes() mount.
+ */
+export async function healthPlugin(
+  fastify: FastifyInstance,
+  opts: FastifyPluginOptions & { db?: Db } & HealthRouteOptions,
+): Promise<void> {
+  fastify.get("/health", async (_req, reply) => {
+    if (!opts.db) {
+      return reply.send({ status: "ok" });
     }
-
-    const payload = await collectHealthPayload(db, opts);
-    res.json(payload);
+    const payload = await collectHealthPayload(opts.db, opts);
+    return reply.send(payload);
   });
-
-  return router;
 }

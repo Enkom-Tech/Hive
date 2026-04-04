@@ -1,8 +1,7 @@
-import express from "express";
-import request from "supertest";
+import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../config.js";
-import { workerDownloadsRoutes } from "../routes/worker-downloads.js";
+import { workerDownloadsPlugin } from "../routes/worker-downloads.js";
 import {
   clearWorkerDownloadsConfig,
   setWorkerDownloadsConfig,
@@ -85,10 +84,25 @@ function baseConfig(partial: Partial<Config> = {}): Config {
   };
 }
 
+async function buildApp(opts?: {
+  authPublicBaseUrl?: string;
+  workerProvisionManifestJson?: string;
+  workerProvisionManifestFile?: string;
+  workerProvisionManifestSigningKeyPem?: string;
+}): Promise<FastifyInstance> {
+  const app = Fastify({ logger: false });
+  await app.register(workerDownloadsPlugin, opts ?? {});
+  await app.ready();
+  return app;
+}
+
 describe("GET /api/worker-downloads", () => {
-  afterEach(() => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
     clearWorkerDownloadsConfig();
     vi.unstubAllGlobals();
+    await app?.close();
   });
 
   it("returns manifest artifacts (manifest-only mode)", async () => {
@@ -125,16 +139,16 @@ describe("GET /api/worker-downloads", () => {
       }),
     );
 
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/");
-    expect(res.status).toBe(200);
-    expect(res.body.source).toBe("manifest");
-    expect(res.body.tag).toBe("v9.9.9");
-    expect(res.body.artifacts).toHaveLength(1);
-    expect(res.body.artifacts[0].url).toContain("linux_amd64");
-    expect(res.body.artifacts[0].sha256).toBe("deadbeef".repeat(8));
-    expect(res.body.workerDeliveryBusConfigured).toBe(false);
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ source: string; tag: string; artifacts: unknown[]; workerDeliveryBusConfigured: boolean }>();
+    expect(body.source).toBe("manifest");
+    expect(body.tag).toBe("v9.9.9");
+    expect(body.artifacts).toHaveLength(1);
+    expect((body.artifacts[0] as { url: string }).url).toContain("linux_amd64");
+    expect((body.artifacts[0] as { sha256: string }).sha256).toBe("deadbeef".repeat(8));
+    expect(body.workerDeliveryBusConfigured).toBe(false);
   });
 
   it("includes workerDeliveryBusConfigured when HIVE_WORKER_DELIVERY_BUS_URL is set", async () => {
@@ -163,11 +177,10 @@ describe("GET /api/worker-downloads", () => {
         return new Response("not found", { status: 404 });
       }),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/");
-    expect(res.status).toBe(200);
-    expect(res.body.workerDeliveryBusConfigured).toBe(true);
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ workerDeliveryBusConfigured: boolean }>().workerDeliveryBusConfigured).toBe(true);
   });
 
   it("returns GitHub assets without mirror", async () => {
@@ -195,12 +208,12 @@ describe("GET /api/worker-downloads", () => {
         return new Response("nope", { status: 404 });
       }),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/");
-    expect(res.status).toBe(200);
-    expect(res.body.source).toBe("github");
-    expect(res.body.artifacts[0].url).toBe(
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ source: string; artifacts: { url: string }[] }>();
+    expect(body.source).toBe("github");
+    expect(body.artifacts[0]?.url).toBe(
       "https://github.com/o/r/releases/download/v1.0.0/a.tgz",
     );
   });
@@ -231,14 +244,14 @@ describe("GET /api/worker-downloads", () => {
         return new Response("nope", { status: 404 });
       }),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/");
-    expect(res.status).toBe(200);
-    expect(res.body.artifacts[0].url).toBe(
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ artifacts: { url: string }[]; sha256sumsUrl: string }>();
+    expect(body.artifacts[0]?.url).toBe(
       "https://cdn.example/w/v1.0.0/hive-worker_v1.0.0_linux_amd64.tar.gz",
     );
-    expect(res.body.sha256sumsUrl).toBe("https://cdn.example/w/v1.0.0/SHA256SUMS");
+    expect(body.sha256sumsUrl).toBe("https://cdn.example/w/v1.0.0/SHA256SUMS");
   });
 
   it("returns error payload when GitHub fails", async () => {
@@ -247,12 +260,12 @@ describe("GET /api/worker-downloads", () => {
       "fetch",
       vi.fn(async () => new Response("err", { status: 404 })),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/");
-    expect(res.status).toBe(200);
-    expect(res.body.error).toMatch(/GitHub HTTP/);
-    expect(res.body.releasesPageUrl).toContain("github.com");
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ error: string; releasesPageUrl: string }>();
+    expect(body.error).toMatch(/GitHub HTTP/);
+    expect(body.releasesPageUrl).toContain("github.com");
   });
 
   it("rejects invalid manifest schema", async () => {
@@ -267,12 +280,12 @@ describe("GET /api/worker-downloads", () => {
         }),
       ),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/");
-    expect(res.status).toBe(200);
-    expect(res.body.error).toMatch(/schemaVersion/);
-    expect(res.body.artifacts).toEqual([]);
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ error: string; artifacts: unknown[] }>();
+    expect(body.error).toMatch(/schemaVersion/);
+    expect(body.artifacts).toEqual([]);
   });
 
   it("includes Authorization when HIVE_GITHUB_TOKEN set", async () => {
@@ -283,12 +296,11 @@ describe("GET /api/worker-downloads", () => {
       new Response(JSON.stringify({ tag_name: "v0.0.0", assets: [] }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    await request(app).get("/api/worker-downloads/");
+    app = await buildApp();
+    await app.inject({ method: "GET", url: "/worker-downloads" });
     expect(fetchMock).toHaveBeenCalled();
     const call = fetchMock.mock.calls[0];
-    const init = call[1] as RequestInit | undefined;
+    const init = call?.[1] as RequestInit | undefined;
     const h = init?.headers as Record<string, string>;
     expect(h.Authorization).toBe("Bearer ghp_secret");
   });
@@ -322,23 +334,22 @@ describe("GET /api/worker-downloads", () => {
         return new Response("nope", { status: 404 });
       }),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/install.sh");
-    expect(res.status).toBe(200);
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads/install.sh" });
+    expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toMatch(/text\/plain/);
-    expect(res.text).toContain("#!/usr/bin/env bash");
-    expect(res.text).toContain("Linux/x86_64");
-    expect(res.text).toContain("curl -fsSL");
-    expect(res.text).toContain("https://github.com/o/r/releases/download/v1.0.0/linux.tgz");
-    expect(res.text).toContain("HIVE_PAIRING");
-    expect(res.text).toContain('exec "$MAIN_BIN" pair');
-    expect(res.text).toContain("HIVE_DRONE_PROVISION_TOKEN");
-    expect(res.text).toContain('exec "$MAIN_BIN"');
-    expect(res.text).toContain(".local/bin");
-    expect(res.text).toContain("ln -sf hive-worker worker");
-    expect(res.text).toContain("# hive-worker PATH");
-    expect(res.text).toContain("HIVE_WORKER_EXTRACT_ONLY");
+    expect(res.body).toContain("#!/usr/bin/env bash");
+    expect(res.body).toContain("Linux/x86_64");
+    expect(res.body).toContain("curl -fsSL");
+    expect(res.body).toContain("https://github.com/o/r/releases/download/v1.0.0/linux.tgz");
+    expect(res.body).toContain("HIVE_PAIRING");
+    expect(res.body).toContain('exec "$MAIN_BIN" pair');
+    expect(res.body).toContain("HIVE_DRONE_PROVISION_TOKEN");
+    expect(res.body).toContain('exec "$MAIN_BIN"');
+    expect(res.body).toContain(".local/bin");
+    expect(res.body).toContain("ln -sf hive-worker worker");
+    expect(res.body).toContain("# hive-worker PATH");
+    expect(res.body).toContain("HIVE_WORKER_EXTRACT_ONLY");
   });
 
   it("install.sh embeds agent id from ?agentId=", async () => {
@@ -366,14 +377,14 @@ describe("GET /api/worker-downloads", () => {
         return new Response("nope", { status: 404 });
       }),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
+    app = await buildApp();
     const aid = "550e8400-e29b-41d4-a716-446655440000";
-    const res = await request(app).get(
-      `/api/worker-downloads/install.sh?agentId=${encodeURIComponent(aid)}`,
-    );
-    expect(res.status).toBe(200);
-    expect(res.text).toContain(aid);
+    const res = await app.inject({
+      method: "GET",
+      url: `/worker-downloads/install.sh?agentId=${encodeURIComponent(aid)}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain(aid);
   });
 
   it("serves install.ps1 when a Windows zip artifact exists", async () => {
@@ -401,21 +412,20 @@ describe("GET /api/worker-downloads", () => {
         return new Response("nope", { status: 404 });
       }),
     );
-    const app = express();
-    app.use("/api/worker-downloads", workerDownloadsRoutes());
-    const res = await request(app).get("/api/worker-downloads/install.ps1");
-    expect(res.status).toBe(200);
-    expect(res.text).toContain("Invoke-WebRequest");
-    expect(res.text).toContain("hive-worker_v1.0.0_windows_amd64.zip");
-    expect(res.text).toContain("HIVE_PAIRING");
-    expect(res.text).toContain("& $mainExe pair");
-    expect(res.text).toContain("HIVE_DRONE_PROVISION_TOKEN");
-    expect(res.text).toContain("& $mainExe");
-    expect(res.text).toContain(".local\\bin");
-    expect(res.text).toContain("Hive-WorkerAlias");
-    expect(res.text).toContain("SetEnvironmentVariable('Path'");
-    expect(res.text).toContain("HIVE_WORKER_EXTRACT_ONLY");
-    expect(res.text).toContain("$env:Path = $normBin");
-    expect(res.text).toContain("$procHasBin");
+    app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/worker-downloads/install.ps1" });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("Invoke-WebRequest");
+    expect(res.body).toContain("hive-worker_v1.0.0_windows_amd64.zip");
+    expect(res.body).toContain("HIVE_PAIRING");
+    expect(res.body).toContain("& $mainExe pair");
+    expect(res.body).toContain("HIVE_DRONE_PROVISION_TOKEN");
+    expect(res.body).toContain("& $mainExe");
+    expect(res.body).toContain(".local\\bin");
+    expect(res.body).toContain("Hive-WorkerAlias");
+    expect(res.body).toContain("SetEnvironmentVariable('Path'");
+    expect(res.body).toContain("HIVE_WORKER_EXTRACT_ONLY");
+    expect(res.body).toContain("$env:Path = $normBin");
+    expect(res.body).toContain("$procHasBin");
   });
 });

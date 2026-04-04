@@ -1,24 +1,16 @@
-import type { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import { notFound } from "../../errors.js";
 import { readSkillMarkdown } from "./read-skill-markdown.js";
 
-export function registerSkillsRoutes(router: Router): void {
-  router.get("/skills/index", (_req, res) => {
-    res.json({
-      skills: [
-        { name: "hive", path: "/api/skills/hive" },
-        {
-          name: "hive-create-agent",
-          path: "/api/skills/hive-create-agent",
-        },
-      ],
-    });
+export function registerSkillsRoutesF(fastify: FastifyInstance): void {
+  fastify.get("/api/skills/index", (_req, reply) => {
+    return reply.send({ skills: [{ name: "hive", path: "/api/skills/hive" }, { name: "hive-create-agent", path: "/api/skills/hive-create-agent" }] });
   });
 
-  router.get("/skills/:skillName", (req, res) => {
-    const skillName = (req.params.skillName as string).trim().toLowerCase();
+  fastify.get<{ Params: { skillName: string } }>("/api/skills/:skillName", (req, reply) => {
+    const skillName = req.params.skillName.trim().toLowerCase();
     const markdown = readSkillMarkdown(skillName);
     if (!markdown) throw notFound("Skill not found");
-    res.type("text/markdown").send(markdown);
+    return reply.type("text/markdown").send(markdown);
   });
 }

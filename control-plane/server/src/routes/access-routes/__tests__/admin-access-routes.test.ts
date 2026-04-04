@@ -1,40 +1,58 @@
-import express from "express";
-import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
 import { unauthorized } from "../../../errors.js";
-import { registerAdminAccessRoutes } from "../admin-access-routes.js";
-import { errorHandler } from "../../../middleware/error-handler.js";
+import { registerAdminAccessRoutesF } from "../admin-access-routes.js";
+import { createRouteTestFastify } from "../../../__tests__/helpers/route-app.js";
 
-describe("registerAdminAccessRoutes", () => {
+/** Minimal mock that causes isInstanceAdmin to reject so assertInstanceAdminF throws. */
+function makeAccessWithDeniedAdmin() {
+  return {
+    isInstanceAdmin: async () => false,
+  } as unknown as ReturnType<typeof import("../../../services/access.js").accessService>;
+}
+
+describe("registerAdminAccessRoutesF", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
   it("returns 401 when assertInstanceAdmin rejects", async () => {
-    const app = express();
-    app.use(express.json());
-    const router = express.Router();
-    registerAdminAccessRoutes(router, {
-      access: {} as ReturnType<typeof import("../../../services/access.js").accessService>,
-      assertInstanceAdmin: async () => {
-        throw unauthorized();
-      },
+    app = await createRouteTestFastify({
+      plugin: async (fastify) =>
+        registerAdminAccessRoutesF(fastify, {
+          access: {} as ReturnType<typeof import("../../../services/access.js").accessService>,
+          assertInstanceAdmin: async () => {
+            throw unauthorized();
+          },
+        }),
+      // Provide a system principal so the internal assertInstanceAdminF passes — but we
+      // also supply a non-admin user principal so the route correctly rejects non-admins.
+      // Use an agent principal so the internal check throws unauthorized (type !== user/system).
+      principal: { type: "agent", id: "agent-1", company_id: "company-1", roles: [] },
     });
-    app.use(router);
-    app.use(errorHandler);
-    const res = await request(app).post("/admin/users/u1/promote-instance-admin");
-    expect(res.status).toBe(401);
+    const res = await app.inject({ method: "POST", url: "/api/admin/users/u1/promote-instance-admin" });
+    expect(res.statusCode).toBe(401);
   });
 
   it("returns 400 for invalid company-access put body", async () => {
-    const app = express();
-    app.use(express.json());
-    const router = express.Router();
-    registerAdminAccessRoutes(router, {
-      access: {} as ReturnType<typeof import("../../../services/access.js").accessService>,
-      assertInstanceAdmin: async () => {},
+    app = await createRouteTestFastify({
+      plugin: async (fastify) =>
+        registerAdminAccessRoutesF(fastify, {
+          access: {
+            isInstanceAdmin: async () => true,
+          } as unknown as ReturnType<typeof import("../../../services/access.js").accessService>,
+          assertInstanceAdmin: async () => {},
+        }),
+      principal: { type: "user", id: "u1", company_ids: [], roles: ["instance_admin"] },
     });
-    app.use(router);
-    app.use(errorHandler);
-    const res = await request(app)
-      .put("/admin/users/u1/company-access")
-      .send({ companyIds: ["not-a-uuid"] });
-    expect(res.status).toBe(400);
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/admin/users/u1/company-access",
+      payload: { companyIds: ["not-a-uuid"] },
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { Request } from "express";
 import {
   adaptReplayedWorkerApiBody,
   buildWorkerApiSuccessResponse,
@@ -7,8 +6,8 @@ import {
   workerApiSuccessJsonBody,
 } from "./worker-api-payload.js";
 
-function mockReq(headers: Record<string, string> = {}): Request {
-  return { headers } as Request;
+function mockReq(headers: Record<string, string> = {}): { headers: Record<string, string> } {
+  return { headers };
 }
 
 describe("wantsAgentPayloadToon", () => {

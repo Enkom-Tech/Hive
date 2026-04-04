@@ -1,20 +1,14 @@
-import { Router } from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { companyRoutes } from "../routes/companies/index.js";
-import { createRouteTestApp, principalAgent, principalBoard } from "./helpers/route-app.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
+import type { Db } from "@hive/db";
+import { companiesPlugin } from "../routes/companies/index.js";
+import { createRouteTestFastify, principalAgent, principalBoard } from "./helpers/route-app.js";
 
-const mockDb = {} as import("@hive/db").Db;
+const mockDb = {} as Db;
 
 const companyA = "550e8400-e29b-41d4-a716-446655440000";
 const companyB = "650e8400-e29b-41d4-a716-446655440001";
 const workerInstanceId = "aaaaaaaa-e29b-41d4-a716-446655440099";
-
-function apiRouter() {
-  const r = Router();
-  r.use("/companies", companyRoutes(mockDb));
-  return r;
-}
 
 const createWorkerInstanceLinkEnrollmentToken = vi.fn(() =>
   Promise.resolve({
@@ -57,49 +51,74 @@ vi.mock("../services/index.js", () => ({
 }));
 
 describe("POST /api/companies/:companyId/worker-instances/:workerInstanceId/link-enrollment-tokens", () => {
+  let app: FastifyInstance;
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
+  afterEach(async () => {
+    await app?.close();
+  });
+
   it("returns 201 when board user has access to the company", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(),
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => companiesPlugin(fastify, { db: mockDb }),
       principal: principalBoard({ companyIds: [companyA] }),
     });
-    const path = `/api/companies/${companyA}/worker-instances/${workerInstanceId}/link-enrollment-tokens`;
-    const res = await request(app).post(path).send({});
-    expect(res.status).toBe(201);
-    expect(res.body.token).toBe("hive_wen_inst_test");
-    expect(res.body.expiresAt).toBe("2099-01-01T00:00:00.000Z");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/worker-instances/${workerInstanceId}/link-enrollment-tokens`,
+      payload: {},
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().token).toBe("hive_wen_inst_test");
+    expect(res.json().expiresAt).toBe("2099-01-01T00:00:00.000Z");
     expect(createWorkerInstanceLinkEnrollmentToken).toHaveBeenCalledWith(companyA, workerInstanceId, 900);
   });
 
   it("returns 403 when board user cannot access company in URL", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(),
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => companiesPlugin(fastify, { db: mockDb }),
       principal: principalBoard({ companyIds: [companyA] }),
     });
-    const path = `/api/companies/${companyB}/worker-instances/${workerInstanceId}/link-enrollment-tokens`;
-    await request(app).post(path).send({}).expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyB}/worker-instances/${workerInstanceId}/link-enrollment-tokens`,
+      payload: {},
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.statusCode).toBe(403);
     expect(createWorkerInstanceLinkEnrollmentToken).not.toHaveBeenCalled();
   });
 
   it("returns 403 when actor is an agent", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(),
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => companiesPlugin(fastify, { db: mockDb }),
       principal: principalAgent({ agentId: "bbbbbbbb-e29b-41d4-a716-4466554400aa", companyId: companyA }),
     });
-    const path = `/api/companies/${companyA}/worker-instances/${workerInstanceId}/link-enrollment-tokens`;
-    await request(app).post(path).send({}).expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/worker-instances/${workerInstanceId}/link-enrollment-tokens`,
+      payload: {},
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.statusCode).toBe(403);
     expect(createWorkerInstanceLinkEnrollmentToken).not.toHaveBeenCalled();
   });
 
   it("returns 403 when unauthenticated (assertBoard before session checks)", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(),
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => companiesPlugin(fastify, { db: mockDb }),
       principal: null,
     });
-    const path = `/api/companies/${companyA}/worker-instances/${workerInstanceId}/link-enrollment-tokens`;
-    await request(app).post(path).send({}).expect(403);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/worker-instances/${workerInstanceId}/link-enrollment-tokens`,
+      payload: {},
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

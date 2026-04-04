@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import type { Request } from "express";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { droneProvisioningTokens } from "@hive/db";
 import type { Principal } from "@hive/shared";
-import { getCurrentPrincipal } from "../auth/principal.js";
+import type { PrincipalCarrier, HeaderCarrier } from "../routes/authz.js";
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -27,10 +26,10 @@ function principalMayAccessCompany(p: Principal | null | undefined, companyId: s
  */
 export async function canReadCompanyWorkerRuntimeManifest(
   db: Db,
-  req: Request,
+  req: PrincipalCarrier & HeaderCarrier,
   companyId: string,
 ): Promise<boolean> {
-  const p = getCurrentPrincipal(req);
+  const p = req.principal ?? null;
   if (p?.type === "agent" && p.company_id === companyId) {
     return true;
   }
@@ -38,7 +37,8 @@ export async function canReadCompanyWorkerRuntimeManifest(
     return true;
   }
 
-  const authHeader = req.header("authorization");
+  const rawAuth = req.headers["authorization"];
+  const authHeader = Array.isArray(rawAuth) ? rawAuth[0] : rawAuth;
   if (!authHeader?.toLowerCase().startsWith("bearer ")) {
     return false;
   }

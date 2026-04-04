@@ -1,6 +1,5 @@
 import helmet from "helmet";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { RequestHandler, Response } from "express";
 
 export type HelmetCspOptions = {
   /** Added to connect-src (e.g. Vite HMR ws/http on a separate port in middleware mode). */
@@ -15,7 +14,7 @@ export type HelmetCspOptions = {
 
 const nonceRef =
   (_req: IncomingMessage, res: ServerResponse) =>
-  `'nonce-${(res as Response).locals?.cspNonce ?? ""}'`;
+  `'nonce-${(res as ServerResponse & { locals?: Record<string, unknown> }).locals?.cspNonce ?? ""}'`;
 
 /**
  * Helmet with CSP. Default profile uses per-request nonces (cspNonceMiddleware) for script-src and style-src.
@@ -73,7 +72,11 @@ export function createHelmet(opts: HelmetCspOptions = {}): ReturnType<typeof hel
 }
 
 /** Sets Permissions-Policy (Helmet does not include it). */
-export const permissionsPolicyMiddleware: RequestHandler = (_req, res, next) => {
-  res.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+export const permissionsPolicyMiddleware = (
+  _req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void,
+): void => {
+  res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
   next();
 };

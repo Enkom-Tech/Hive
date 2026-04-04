@@ -1,4 +1,4 @@
-import { Router, type Request } from "express";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Db } from "@hive/db";
 import {
   createDepartmentSchema,
@@ -6,21 +6,19 @@ import {
   upsertDepartmentMembershipSchema,
   listDepartmentMembershipsQuerySchema,
 } from "@hive/shared";
-import { getCurrentPrincipal } from "../auth/principal.js";
 import { forbidden, unauthorized, unprocessable } from "../errors.js";
-import { validate } from "../middleware/validate.js";
 import { accessService, agentService, departmentService, logActivity } from "../services/index.js";
 import { assertCompanyRead, getActorInfo } from "./authz.js";
 
-export function departmentRoutes(db: Db) {
-  const router = Router();
+export async function departmentsPlugin(fastify: FastifyInstance, opts: { db: Db }): Promise<void> {
+  const { db } = opts;
   const departmentsSvc = departmentService(db);
   const access = accessService(db);
   const agentsSvc = agentService(db);
 
-  async function assertCanManageDepartments(req: Request, companyId: string) {
+  async function assertCanManageDepartmentsFastify(req: FastifyRequest, companyId: string) {
     await assertCompanyRead(db, req, companyId);
-    const p = getCurrentPrincipal(req);
+    const p = req.principal;
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) return;
     if (p?.type === "user") {
       const allowed =
@@ -38,9 +36,9 @@ export function departmentRoutes(db: Db) {
     throw unauthorized();
   }
 
-  async function assertCanAssignMembers(req: Request, companyId: string) {
+  async function assertCanAssignMembersFastify(req: FastifyRequest, companyId: string) {
     await assertCompanyRead(db, req, companyId);
-    const p = getCurrentPrincipal(req);
+    const p = req.principal;
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) return;
     if (p?.type === "user") {
       const allowed = await access.canUser(companyId, p.id ?? "", "departments:assign_members");
@@ -56,119 +54,124 @@ export function departmentRoutes(db: Db) {
     throw unauthorized();
   }
 
-  async function assertAssignablePrincipal(
-    companyId: string,
-    principalType: "user" | "agent",
-    principalId: string,
-  ) {
+  async function assertAssignablePrincipal(companyId: string, principalType: "user" | "agent", principalId: string) {
     if (principalType === "agent") {
       const agent = await agentsSvc.getById(principalId);
       if (!agent || agent.companyId !== companyId) throw unprocessable("Agent is not part of this company");
       return;
     }
     const membership = await access.getMembership(companyId, "user", principalId);
-    if (!membership || membership.status !== "active") {
-      throw unprocessable("User is not an active company member");
-    }
+    if (!membership || membership.status !== "active") throw unprocessable("User is not an active company member");
   }
 
-  router.get("/companies/:companyId/departments", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    await assertCompanyRead(db, req, companyId);
-    const rows = await departmentsSvc.list(companyId);
-    res.json(rows);
-  });
+  fastify.get<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/departments",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCompanyRead(db, req, companyId);
+      return reply.send(await departmentsSvc.list(companyId));
+    },
+  );
 
-  router.post("/companies/:companyId/departments", validate(createDepartmentSchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
-    await assertCanManageDepartments(req, companyId);
-    const created = await departmentsSvc.create(companyId, req.body);
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "department.created",
-      entityType: "department",
-      entityId: created.id,
-      details: { name: created.name, slug: created.slug },
-    });
-    res.status(201).json(created);
-  });
+  fastify.post<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/departments",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCanManageDepartmentsFastify(req, companyId);
+      const parsed = createDepartmentSchema.safeParse(req.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+      const created = await departmentsSvc.create(companyId, parsed.data);
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "department.created",
+        entityType: "department",
+        entityId: created.id,
+        details: { name: created.name, slug: created.slug },
+      });
+      return reply.status(201).send(created);
+    },
+  );
 
-  router.patch("/companies/:companyId/departments/:departmentId", validate(updateDepartmentSchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const departmentId = req.params.departmentId as string;
-    await assertCanManageDepartments(req, companyId);
-    const updated = await departmentsSvc.update(companyId, departmentId, req.body);
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "department.updated",
-      entityType: "department",
-      entityId: updated.id,
-      details: req.body,
-    });
-    res.json(updated);
-  });
+  fastify.patch<{ Params: { companyId: string; departmentId: string } }>(
+    "/api/companies/:companyId/departments/:departmentId",
+    async (req, reply) => {
+      const { companyId, departmentId } = req.params;
+      await assertCanManageDepartmentsFastify(req, companyId);
+      const parsed = updateDepartmentSchema.safeParse(req.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+      const updated = await departmentsSvc.update(companyId, departmentId, parsed.data);
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "department.updated",
+        entityType: "department",
+        entityId: updated.id,
+        details: parsed.data,
+      });
+      return reply.send(updated);
+    },
+  );
 
-  router.delete("/companies/:companyId/departments/:departmentId", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const departmentId = req.params.departmentId as string;
-    await assertCanManageDepartments(req, companyId);
-    const removed = await departmentsSvc.remove(companyId, departmentId);
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "department.deleted",
-      entityType: "department",
-      entityId: departmentId,
-      details: { removed: Boolean(removed) },
-    });
-    res.json({ ok: true });
-  });
+  fastify.delete<{ Params: { companyId: string; departmentId: string } }>(
+    "/api/companies/:companyId/departments/:departmentId",
+    async (req, reply) => {
+      const { companyId, departmentId } = req.params;
+      await assertCanManageDepartmentsFastify(req, companyId);
+      const removed = await departmentsSvc.remove(companyId, departmentId);
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "department.deleted",
+        entityType: "department",
+        entityId: departmentId,
+        details: { removed: Boolean(removed) },
+      });
+      return reply.send({ ok: true });
+    },
+  );
 
-  router.get("/companies/:companyId/departments/:departmentId/memberships", async (req, res) => {
-      const companyId = req.params.companyId as string;
-      const departmentId = req.params.departmentId as string;
+  fastify.get<{ Params: { companyId: string; departmentId: string }; Querystring: Record<string, unknown> }>(
+    "/api/companies/:companyId/departments/:departmentId/memberships",
+    async (req, reply) => {
+      const { companyId, departmentId } = req.params;
       await assertCompanyRead(db, req, companyId);
       const parsed = listDepartmentMembershipsQuerySchema.safeParse(req.query);
-      if (!parsed.success) {
-        res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
-        return;
-      }
-      const q = parsed.data;
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid query", details: parsed.error.issues });
       let rows = await departmentsSvc.listMemberships(companyId, departmentId);
-      if (q.principalType) rows = rows.filter((row) => row.principalType === q.principalType);
-      if (q.principalId) rows = rows.filter((row) => row.principalId === q.principalId);
-      res.json(rows);
-  });
+      if (parsed.data.principalType) rows = rows.filter((row) => row.principalType === parsed.data.principalType);
+      if (parsed.data.principalId) rows = rows.filter((row) => row.principalId === parsed.data.principalId);
+      return reply.send(rows);
+    },
+  );
 
-  router.put(
-    "/companies/:companyId/departments/:departmentId/memberships",
-    validate(upsertDepartmentMembershipSchema),
-    async (req, res) => {
-      const companyId = req.params.companyId as string;
-      const departmentId = req.params.departmentId as string;
-      await assertCanAssignMembers(req, companyId);
-      await assertAssignablePrincipal(companyId, req.body.principalType, req.body.principalId);
+  fastify.put<{ Params: { companyId: string; departmentId: string } }>(
+    "/api/companies/:companyId/departments/:departmentId/memberships",
+    async (req, reply) => {
+      const { companyId, departmentId } = req.params;
+      await assertCanAssignMembersFastify(req, companyId);
+      const parsed = upsertDepartmentMembershipSchema.safeParse(req.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+      await assertAssignablePrincipal(companyId, parsed.data.principalType, parsed.data.principalId);
       const row = await departmentsSvc.upsertMembership({
         companyId,
         departmentId,
-        principalType: req.body.principalType,
-        principalId: req.body.principalId,
-        isPrimary: req.body.isPrimary,
-        status: req.body.status,
+        principalType: parsed.data.principalType,
+        principalId: parsed.data.principalId,
+        isPrimary: parsed.data.isPrimary,
+        status: parsed.data.status,
       });
       const actor = getActorInfo(req);
       await logActivity(db, {
@@ -180,46 +183,41 @@ export function departmentRoutes(db: Db) {
         action: "department.membership_upserted",
         entityType: "department",
         entityId: departmentId,
-        details: {
-          principalType: row.principalType,
-          principalId: row.principalId,
-          status: row.status,
-          isPrimary: row.isPrimary,
-        },
+        details: { principalType: row.principalType, principalId: row.principalId, status: row.status, isPrimary: row.isPrimary },
       });
-      res.json(row);
+      return reply.send(row);
     },
   );
 
-  router.delete("/companies/:companyId/departments/:departmentId/memberships", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const departmentId = req.params.departmentId as string;
-    await assertCanAssignMembers(req, companyId);
-    const principalType = String(req.query.principalType ?? "") as "user" | "agent";
-    const principalId = String(req.query.principalId ?? "");
-    if ((principalType !== "user" && principalType !== "agent") || !principalId.trim()) {
-      throw unprocessable("principalType and principalId are required");
-    }
-    const removed = await departmentsSvc.removeMembership({
-      companyId,
-      departmentId,
-      principalType,
-      principalId: principalId.trim(),
-    });
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "department.membership_removed",
-      entityType: "department",
-      entityId: departmentId,
-      details: { principalType, principalId: principalId.trim(), removed: Boolean(removed) },
-    });
-    res.json({ ok: true });
-  });
-
-  return router;
+  fastify.delete<{ Params: { companyId: string; departmentId: string }; Querystring: Record<string, string> }>(
+    "/api/companies/:companyId/departments/:departmentId/memberships",
+    async (req, reply) => {
+      const { companyId, departmentId } = req.params;
+      await assertCanAssignMembersFastify(req, companyId);
+      const principalType = String(req.query.principalType ?? "") as "user" | "agent";
+      const principalId = String(req.query.principalId ?? "");
+      if ((principalType !== "user" && principalType !== "agent") || !principalId.trim()) {
+        throw unprocessable("principalType and principalId are required");
+      }
+      const removed = await departmentsSvc.removeMembership({
+        companyId,
+        departmentId,
+        principalType,
+        principalId: principalId.trim(),
+      });
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "department.membership_removed",
+        entityType: "department",
+        entityId: departmentId,
+        details: { principalType, principalId: principalId.trim(), removed: Boolean(removed) },
+      });
+      return reply.send({ ok: true });
+    },
+  );
 }

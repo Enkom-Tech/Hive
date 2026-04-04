@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Request } from "express";
+import type { FastifyRequest } from "fastify";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@hive/db";
@@ -20,14 +20,14 @@ function hashToken(token: string) {
 export interface BuiltinResolverDeps {
   db: Db;
   deploymentMode: DeploymentMode;
-  resolveSession?: (req: Request) => Promise<BetterAuthSessionResult | null>;
+  resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
 }
 
 export async function resolvePrincipalBuiltin(
-  req: Request,
+  req: FastifyRequest,
   deps: BuiltinResolverDeps,
 ): Promise<Principal | null> {
-  const runIdHeader = req.header("x-hive-run-id") ?? undefined;
+  const runIdHeader = req.headers["x-hive-run-id"] as string | undefined;
 
   if (deps.deploymentMode === "local_trusted") {
     const memberships = await deps.db
@@ -48,7 +48,8 @@ export async function resolvePrincipalBuiltin(
     };
   }
 
-  const authHeader = req.header("authorization");
+  const authHeaderRaw = req.headers["authorization"];
+  const authHeader = Array.isArray(authHeaderRaw) ? authHeaderRaw[0] : authHeaderRaw;
   if (authHeader?.toLowerCase().startsWith("bearer ")) {
     const token = authHeader.slice("bearer ".length).trim();
     if (!token) return null;
@@ -130,13 +131,24 @@ export async function resolvePrincipalBuiltin(
     return null;
   }
 
-  if (deps.deploymentMode === "authenticated" && deps.resolveSession) {
+  if (deps.deploymentMode === "authenticated") {
     let session: BetterAuthSessionResult | null = null;
     try {
-      session = await deps.resolveSession(req);
+      if (deps.resolveSessionFromHeaders) {
+        const headers = new Headers();
+        for (const [key, val] of Object.entries(req.headers)) {
+          if (!val) continue;
+          if (Array.isArray(val)) {
+            for (const v of val) headers.append(key, v);
+          } else {
+            headers.set(key, val);
+          }
+        }
+        session = await deps.resolveSessionFromHeaders(headers);
+      }
     } catch (err) {
       logger.warn(
-        { err, method: req.method, url: req.originalUrl },
+        { err, method: req.method, url: req.url },
         "Failed to resolve auth session from request headers",
       );
     }
@@ -165,7 +177,7 @@ export async function resolvePrincipalBuiltin(
             await accessService(deps.db).promoteFirstInstanceAdminIfVacant(userId);
           } catch (err) {
             logger.warn(
-              { err, userId, method: req.method, url: req.originalUrl },
+              { err, userId, method: req.method, url: req.url },
               "Failed to bootstrap first instance admin from session",
             );
           }

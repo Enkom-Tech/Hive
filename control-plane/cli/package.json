@@ -1,6 +1,6 @@
 {
   "name": "@hive/cli",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Hive CLI — orchestrate AI agent teams",
   "type": "module",
   "bin": {

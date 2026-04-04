@@ -1,47 +1,49 @@
-import type { Router } from "express";
-import type { Request } from "express";
+import type { FastifyInstance } from "fastify";
 import { updateUserCompanyAccessSchema } from "@hive/shared";
-import { notFound } from "../../errors.js";
-import { validate } from "../../middleware/validate.js";
+import { notFound, forbidden, unauthorized } from "../../errors.js";
+import type { PrincipalCarrier } from "../authz.js";
 
 export type AdminAccessRoutesDeps = {
   access: ReturnType<typeof import("../../services/access.js").accessService>;
-  assertInstanceAdmin: (req: Request) => Promise<void>;
+  assertInstanceAdmin: (req: PrincipalCarrier) => Promise<void>;
 };
 
-export function registerAdminAccessRoutes(router: Router, deps: AdminAccessRoutesDeps): void {
-  const { access, assertInstanceAdmin } = deps;
+async function assertInstanceAdminF(req: PrincipalCarrier, access: AdminAccessRoutesDeps["access"]): Promise<void> {
+  const p = req.principal ?? null;
+  if (p?.type !== "user" && p?.type !== "system") throw unauthorized();
+  if (p?.type === "system") return;
+  if (p?.roles?.includes("instance_admin")) return;
+  const allowed = await access.isInstanceAdmin(p?.id ?? "");
+  if (!allowed) throw forbidden("Instance admin required");
+}
 
-  router.post("/admin/users/:userId/promote-instance-admin", async (req, res) => {
-    await assertInstanceAdmin(req);
-    const userId = req.params.userId as string;
-    const result = await access.promoteInstanceAdmin(userId);
-    res.status(201).json(result);
+export function registerAdminAccessRoutesF(fastify: FastifyInstance, deps: AdminAccessRoutesDeps): void {
+  const { access } = deps;
+
+  fastify.post<{ Params: { userId: string } }>("/api/admin/users/:userId/promote-instance-admin", async (req, reply) => {
+    await assertInstanceAdminF(req, access);
+    const result = await access.promoteInstanceAdmin(req.params.userId);
+    return reply.status(201).send(result);
   });
 
-  router.post("/admin/users/:userId/demote-instance-admin", async (req, res) => {
-    await assertInstanceAdmin(req);
-    const userId = req.params.userId as string;
-    const removed = await access.demoteInstanceAdmin(userId);
+  fastify.post<{ Params: { userId: string } }>("/api/admin/users/:userId/demote-instance-admin", async (req, reply) => {
+    await assertInstanceAdminF(req, access);
+    const removed = await access.demoteInstanceAdmin(req.params.userId);
     if (!removed) throw notFound("Instance admin role not found");
-    res.json(removed);
+    return reply.send(removed);
   });
 
-  router.get("/admin/users/:userId/company-access", async (req, res) => {
-    await assertInstanceAdmin(req);
-    const userId = req.params.userId as string;
-    const memberships = await access.listUserCompanyAccess(userId);
-    res.json(memberships);
+  fastify.get<{ Params: { userId: string } }>("/api/admin/users/:userId/company-access", async (req, reply) => {
+    await assertInstanceAdminF(req, access);
+    return reply.send(await access.listUserCompanyAccess(req.params.userId));
   });
 
-  router.put(
-    "/admin/users/:userId/company-access",
-    validate(updateUserCompanyAccessSchema),
-    async (req, res) => {
-      await assertInstanceAdmin(req);
-      const userId = req.params.userId as string;
-      const memberships = await access.setUserCompanyAccess(userId, req.body.companyIds ?? []);
-      res.json(memberships);
-    }
-  );
+  fastify.put<{ Params: { userId: string } }>("/api/admin/users/:userId/company-access", async (req, reply) => {
+    await assertInstanceAdminF(req, access);
+    const parsed = updateUserCompanyAccessSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    const body = parsed.data as { companyIds?: string[] };
+    const memberships = await access.setUserCompanyAccess(req.params.userId, body.companyIds ?? []);
+    return reply.send(memberships);
+  });
 }

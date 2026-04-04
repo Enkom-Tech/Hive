@@ -1,10 +1,9 @@
-/// <reference path="../types/express.d.ts" />
-import express from "express";
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@hive/db";
+import type { Principal } from "@hive/shared";
 import { ISSUE_STATUS_TODO, ISSUE_STATUS_DONE } from "@hive/shared";
-import { webhookDeliveryRoutes } from "../routes/webhook-deliveries.js";
-import { errorHandler } from "../middleware/error-handler.js";
+import { createRouteTestFastify } from "./helpers/route-app.js";
+import { webhookDeliveriesPlugin } from "../routes/webhook-deliveries.js";
 
 const getByIdMock = vi.fn();
 
@@ -16,26 +15,6 @@ vi.mock("../services/index.js", async (importOriginal) => {
   };
 });
 
-function createApp(db: Parameters<typeof webhookDeliveryRoutes>[0], actor: {
-  type: "board" | "agent";
-  userId?: string;
-  agentId?: string;
-  companyId?: string;
-}) {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    req.principal =
-      actor.type === "board"
-        ? { type: "system", id: actor.userId ?? "board", roles: [] }
-        : { type: "agent", id: actor.agentId ?? "agent-1", company_id: actor.companyId ?? "company-A", roles: [] };
-    next();
-  });
-  app.use(webhookDeliveryRoutes(db));
-  app.use(errorHandler);
-  return app;
-}
-
 const companyA = "550e8400-e29b-41d4-a716-446655440000";
 const companyB = "660e8400-e29b-41d4-a716-446655440001";
 const issueId = "770e8400-e29b-41d4-a716-446655440002";
@@ -46,7 +25,6 @@ function mockDb(deliveries: Array<Record<string, unknown>> = []) {
     orderBy: () => ({
       limit: () => Promise.resolve(deliveries),
     }),
-    // deliverWorkAvailable(agentId, companyId, issueId, db) does db.select().from(agents).where(...).limit(1)
     limit: () => Promise.resolve([]),
   };
   return {
@@ -58,10 +36,12 @@ function mockDb(deliveries: Array<Record<string, unknown>> = []) {
     insert: () => ({
       values: () => Promise.resolve(),
     }),
-  } as unknown as Parameters<typeof webhookDeliveryRoutes>[0];
+  } as unknown as Db;
 }
 
-describe("GET /companies/:companyId/webhook-deliveries", () => {
+const boardPrincipal: Principal = { type: "system", id: "board", roles: [] };
+
+describe("GET /api/companies/:companyId/webhook-deliveries", () => {
   beforeEach(() => {
     getByIdMock.mockReset();
   });
@@ -82,40 +62,56 @@ describe("GET /companies/:companyId/webhook-deliveries", () => {
         createdAt: new Date(),
       },
     ]);
-    const app = createApp(db, { type: "board" });
-    const res = await request(app).get(`/companies/${companyA}/webhook-deliveries`);
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body.deliveries)).toBe(true);
-    expect(res.body.deliveries).toHaveLength(1);
-    expect(res.body.deliveries[0].status).toBe("failed");
-    expect(res.body.deliveries[0].companyId).toBe(companyA);
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/webhook-deliveries` });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json().deliveries)).toBe(true);
+    expect(res.json().deliveries).toHaveLength(1);
+    expect(res.json().deliveries[0].status).toBe("failed");
+    expect(res.json().deliveries[0].companyId).toBe(companyA);
+    await app.close();
   });
 
   it("returns 403 when agent key calls with another company id", async () => {
     const db = mockDb([]);
-    const app = createApp(db, {
+    const principal: Principal = {
       type: "agent",
-      agentId,
-      companyId: companyA,
+      id: agentId,
+      company_id: companyA,
+      roles: [],
+    };
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal,
     });
-    const res = await request(app).get(`/companies/${companyB}/webhook-deliveries`);
-    expect(res.status).toBe(403);
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyB}/webhook-deliveries` });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("returns 200 when agent key calls with own company id", async () => {
     const db = mockDb([]);
-    const app = createApp(db, {
+    const principal: Principal = {
       type: "agent",
-      agentId,
-      companyId: companyA,
+      id: agentId,
+      company_id: companyA,
+      roles: [],
+    };
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal,
     });
-    const res = await request(app).get(`/companies/${companyA}/webhook-deliveries`);
-    expect(res.status).toBe(200);
-    expect(res.body.deliveries).toEqual([]);
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/webhook-deliveries` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deliveries).toEqual([]);
+    await app.close();
   });
 });
 
-describe("POST /companies/:companyId/webhook-deliveries/retry", () => {
+describe("POST /api/companies/:companyId/webhook-deliveries/retry", () => {
   beforeEach(() => {
     getByIdMock.mockReset();
   });
@@ -128,22 +124,34 @@ describe("POST /companies/:companyId/webhook-deliveries/retry", () => {
       status: ISSUE_STATUS_TODO,
     });
     const db = mockDb([]);
-    const app = createApp(db, { type: "board" });
-    const res = await request(app)
-      .post(`/companies/${companyA}/webhook-deliveries/retry`)
-      .send({ issueId, agentId });
-    expect(res.status).toBe(202);
-    expect(res.body.accepted).toBe(true);
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/webhook-deliveries/retry`,
+      payload: { issueId, agentId },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().accepted).toBe(true);
+    await app.close();
   });
 
   it("returns 404 when issue not found", async () => {
     getByIdMock.mockResolvedValueOnce(null);
     const db = mockDb([]);
-    const app = createApp(db, { type: "board" });
-    const res = await request(app)
-      .post(`/companies/${companyA}/webhook-deliveries/retry`)
-      .send({ issueId, agentId });
-    expect(res.status).toBe(404);
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/webhook-deliveries/retry`,
+      payload: { issueId, agentId },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
   });
 
   it("returns 403 when issue belongs to another company", async () => {
@@ -154,11 +162,17 @@ describe("POST /companies/:companyId/webhook-deliveries/retry", () => {
       status: ISSUE_STATUS_TODO,
     });
     const db = mockDb([]);
-    const app = createApp(db, { type: "board" });
-    const res = await request(app)
-      .post(`/companies/${companyA}/webhook-deliveries/retry`)
-      .send({ issueId, agentId });
-    expect(res.status).toBe(403);
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/webhook-deliveries/retry`,
+      payload: { issueId, agentId },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
   });
 
   it("returns 422 when issue is not assigned to agent", async () => {
@@ -169,11 +183,17 @@ describe("POST /companies/:companyId/webhook-deliveries/retry", () => {
       status: ISSUE_STATUS_TODO,
     });
     const db = mockDb([]);
-    const app = createApp(db, { type: "board" });
-    const res = await request(app)
-      .post(`/companies/${companyA}/webhook-deliveries/retry`)
-      .send({ issueId, agentId });
-    expect(res.status).toBe(422);
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/webhook-deliveries/retry`,
+      payload: { issueId, agentId },
+    });
+    expect(res.statusCode).toBe(422);
+    await app.close();
   });
 
   it("returns 422 when issue status is not workable", async () => {
@@ -184,10 +204,16 @@ describe("POST /companies/:companyId/webhook-deliveries/retry", () => {
       status: ISSUE_STATUS_DONE,
     });
     const db = mockDb([]);
-    const app = createApp(db, { type: "board" });
-    const res = await request(app)
-      .post(`/companies/${companyA}/webhook-deliveries/retry`)
-      .send({ issueId, agentId });
-    expect(res.status).toBe(422);
+    const app = await createRouteTestFastify({
+      plugin: (f) => webhookDeliveriesPlugin(f, { db }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/companies/${companyA}/webhook-deliveries/retry`,
+      payload: { issueId, agentId },
+    });
+    expect(res.statusCode).toBe(422);
+    await app.close();
   });
 });

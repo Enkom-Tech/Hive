@@ -1,8 +1,16 @@
 import { createPrivateKey, type KeyObject, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { existsSync } from "node:fs";
-import type { Response } from "express";
+import type { ServerResponse } from "node:http";
 import type { WorkerProvisionManifest } from "./worker-provision-manifest.js";
+
+/** Minimal interface for response objects that can receive a manifest payload. */
+export interface ManifestResponseSink {
+  setHeader(name: string, value: string): void;
+  status(code: number): this;
+  type(ct: string): this;
+  send(body: string): void;
+}
 
 /** Response header carrying Ed25519 signature over the exact UTF-8 body bytes sent. */
 export const MANIFEST_SIGNATURE_HEADER = "x-hive-manifest-signature";
@@ -66,19 +74,51 @@ export function loadProvisionManifestSigningKeyPemFromEnv(env: NodeJS.ProcessEnv
   }
 }
 
-/** Send JSON body with optional Ed25519 signature header (same UTF-8 bytes as signed). */
-export function sendSignedProvisionManifestJson(
-  res: Response,
+/**
+ * Build the signed manifest response data without framework-specific I/O.
+ * Returns the body string and optional signature header value.
+ */
+export function buildSignedProvisionManifestResponse(
   manifest: WorkerProvisionManifest,
   signingKeyPem: string | null | undefined,
-  setHeaders: () => void,
-): void {
+): { body: string; signatureHeader: string | null } {
   const body = stableStringifyProvisionManifest(manifest);
   if (signingKeyPem) {
     const key = createPrivateKeyFromPem(signingKeyPem);
     const sig = signProvisionManifestBody(body, key);
-    res.setHeader(MANIFEST_SIGNATURE_HEADER, formatSignatureHeader(sig));
+    return { body, signatureHeader: formatSignatureHeader(sig) };
+  }
+  return { body, signatureHeader: null };
+}
+
+/** Send JSON body with optional Ed25519 signature header (same UTF-8 bytes as signed). */
+export function sendSignedProvisionManifestJson(
+  res: ManifestResponseSink,
+  manifest: WorkerProvisionManifest,
+  signingKeyPem: string | null | undefined,
+  setHeaders: () => void,
+): void {
+  const { body, signatureHeader } = buildSignedProvisionManifestResponse(manifest, signingKeyPem);
+  if (signatureHeader) {
+    res.setHeader(MANIFEST_SIGNATURE_HEADER, signatureHeader);
   }
   setHeaders();
   res.status(200).type("json").send(body);
+}
+
+/** Send JSON body with optional Ed25519 signature header via a raw Node ServerResponse. */
+export function sendSignedProvisionManifestJsonRaw(
+  res: ServerResponse,
+  manifest: WorkerProvisionManifest,
+  signingKeyPem: string | null | undefined,
+  setHeaders: () => void,
+): void {
+  const { body, signatureHeader } = buildSignedProvisionManifestResponse(manifest, signingKeyPem);
+  if (signatureHeader) {
+    res.setHeader(MANIFEST_SIGNATURE_HEADER, signatureHeader);
+  }
+  setHeaders();
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/json");
+  res.end(body);
 }

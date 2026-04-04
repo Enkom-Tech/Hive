@@ -1,10 +1,9 @@
-import { Router, type Request, type Response, type NextFunction } from "express";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { gatewayVirtualKeys } from "@hive/db";
 import { createCostEventSchema, modelTrainingCallbackBodySchema } from "@hive/shared";
-import { validate } from "../middleware/validate.js";
 import { costService } from "../services/costs.js";
 import { modelTrainingService } from "../services/model-training.js";
 import { unauthorized } from "../errors.js";
@@ -22,61 +21,54 @@ const gatewayVirtualKeyLookupQuerySchema = z
     message: "Provide keyHash or bifrostVirtualKeyId",
   });
 
-function requireOperatorSecret(secret: string) {
-  return function operatorSecretMiddleware(req: Request, _res: Response, next: NextFunction): void {
-    const h = req.headers.authorization;
-    const tok =
-      typeof h === "string" && h.toLowerCase().startsWith("bearer ") ? h.slice(7).trim() : "";
-    if (!tok || tok !== secret) {
-      next(unauthorized("Invalid internal operator token"));
-      return;
-    }
-    next();
-  };
-}
-
-/**
- * Training runner callbacks: Bearer per-run token (from dispatch) or optional operator secret.
- * Mounted at /api/internal/hive even when HIVE_INTERNAL_OPERATOR_SECRET is unset so runners work token-only.
- */
-export function internalHiveTrainingCallbackRoutes(
-  db: Db,
-  opts?: { internalOperatorSecret?: string },
-): Router {
-  const router = Router();
-  const training = modelTrainingService(db, {
-    internalOperatorSecret: opts?.internalOperatorSecret?.trim() || undefined,
+export async function internalHiveTrainingCallbackPlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; internalOperatorSecret?: string },
+): Promise<void> {
+  const training = modelTrainingService(opts.db, {
+    internalOperatorSecret: opts.internalOperatorSecret?.trim() || undefined,
   });
 
-  router.post("/model-training-callback", validate(modelTrainingCallbackBodySchema), async (req, res, next) => {
-    try {
-      const body = req.body as z.infer<typeof modelTrainingCallbackBodySchema>;
-      const row = await training.applyCallback(body, req.headers.authorization);
+  fastify.post<{ Body: z.infer<typeof modelTrainingCallbackBodySchema> }>(
+    "/api/internal/hive/model-training-callback",
+    async (req, reply) => {
+      const body = modelTrainingCallbackBodySchema.parse(req.body);
+      const row = await training.applyCallback(body, req.headers.authorization as string | undefined);
       const { callbackTokenHash: _omit, ...safe } = row;
-      res.json(safe);
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  return router;
+      return reply.send(safe);
+    },
+  );
 }
 
 /**
- * Internal webhooks that require Authorization: Bearer <HIVE_INTERNAL_OPERATOR_SECRET>
- * (gateway virtual key lookup, inference metering).
+ * Fastify-native internal operator routes.
+ * Only registered when HIVE_INTERNAL_OPERATOR_SECRET is set.
  */
-export function internalHiveOperatorRoutes(db: Db, opts: { operatorSecret: string }): Router {
-  const router = Router();
-  const costs = costService(db);
-  const requireSecret = requireOperatorSecret(opts.operatorSecret);
+export async function internalHiveOperatorPlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; operatorSecret: string },
+): Promise<void> {
+  const costs = costService(opts.db);
+  const secret = opts.operatorSecret;
 
-  router.get("/gateway-virtual-key-lookup", requireSecret, async (req, res, next) => {
-    try {
+  function requireSecret(authHeader: string | undefined): void {
+    const tok =
+      typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
+        ? authHeader.slice(7).trim()
+        : "";
+    if (!tok || tok !== secret) {
+      throw unauthorized("Invalid internal operator token");
+    }
+  }
+
+  fastify.get<{ Querystring: z.infer<typeof gatewayVirtualKeyLookupQuerySchema> }>(
+    "/api/internal/hive/gateway-virtual-key-lookup",
+    async (req, reply) => {
+      requireSecret(req.headers.authorization as string | undefined);
       const q = gatewayVirtualKeyLookupQuerySchema.parse(req.query);
       const keyHash = q.keyHash?.trim();
       const bifrostId = q.bifrostVirtualKeyId?.trim();
-      const row = await db
+      const row = await opts.db
         .select({
           companyId: gatewayVirtualKeys.companyId,
           keyKind: gatewayVirtualKeys.keyKind,
@@ -93,35 +85,23 @@ export function internalHiveOperatorRoutes(db: Db, opts: { operatorSecret: strin
         .limit(1)
         .then((r) => r[0] ?? null);
       if (!row) {
-        res.status(404).json({ error: "Unknown or revoked gateway virtual key" });
-        return;
+        return reply.status(404).send({ error: "Unknown or revoked gateway virtual key" });
       }
-      res.json({ companyId: row.companyId, keyKind: row.keyKind });
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  router.post(
-    "/inference-metering",
-    requireSecret,
-    validate(inferenceMeteringBodySchema),
-    async (req, res, next) => {
-      try {
-        const { companyId, occurredAt, idempotencyKey, ...rest } = req.body as z.infer<
-          typeof inferenceMeteringBodySchema
-        >;
-        const event = await costs.createEvent(companyId, {
-          ...rest,
-          occurredAt: new Date(occurredAt),
-          gatewayMeteringKey: idempotencyKey?.trim() ? idempotencyKey.trim() : null,
-        });
-        res.status(201).json(event);
-      } catch (e) {
-        next(e);
-      }
+      return reply.send({ companyId: row.companyId, keyKind: row.keyKind });
     },
   );
 
-  return router;
+  fastify.post<{ Body: z.infer<typeof inferenceMeteringBodySchema> }>(
+    "/api/internal/hive/inference-metering",
+    async (req, reply) => {
+      requireSecret(req.headers.authorization as string | undefined);
+      const { companyId, occurredAt, idempotencyKey, ...rest } = inferenceMeteringBodySchema.parse(req.body);
+      const event = await costs.createEvent(companyId, {
+        ...rest,
+        occurredAt: new Date(occurredAt),
+        gatewayMeteringKey: idempotencyKey?.trim() ? idempotencyKey.trim() : null,
+      });
+      return reply.status(201).send(event);
+    },
+  );
 }

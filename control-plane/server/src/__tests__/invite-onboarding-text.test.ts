@@ -1,15 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { Request } from "express";
+import type { HeaderCarrier } from "../routes/authz.js";
 import { buildInviteOnboardingTextDocument } from "../routes/access.js";
 
-function buildReq(host: string): Request {
+function buildReq(host: string): HeaderCarrier {
   return {
-    protocol: "http",
-    header(name: string) {
-      if (name.toLowerCase() === "host") return host;
-      return undefined;
-    },
-  } as unknown as Request;
+    headers: { host },
+  };
 }
 
 describe("buildInviteOnboardingTextDocument", () => {

@@ -1,18 +1,14 @@
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import { APP_VERSION } from "@hive/shared/version";
 import { getReleaseCheck } from "../services/release-check.js";
 
-export function releaseRoutes() {
-  const router = Router();
-
-  router.get("/check", async (_req, res) => {
+export async function releasesPlugin(fastify: FastifyInstance): Promise<void> {
+  fastify.get("/releases/check", async (_req, reply) => {
     try {
       const payload = await getReleaseCheck(APP_VERSION);
-      res.json(payload);
+      return reply.send(payload);
     } catch {
-      res.json({ currentVersion: APP_VERSION });
+      return reply.send({ currentVersion: APP_VERSION });
     }
   });
-
-  return router;
 }

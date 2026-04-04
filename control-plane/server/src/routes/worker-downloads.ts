@@ -1,22 +1,17 @@
-import { Router, type Request } from "express";
+import type { FastifyInstance, FastifyPluginOptions } from "fastify";
 import { getWorkerDownloads } from "../services/worker-downloads.js";
 import {
   buildWorkerInstallBashScript,
   buildWorkerInstallPowerShellScript,
 } from "../services/worker-install-scripts.js";
 import { loadWorkerProvisionManifest } from "../services/worker-provision-manifest.js";
-import { sendSignedProvisionManifestJson } from "../services/worker-manifest-signature.js";
+import {
+  buildSignedProvisionManifestResponse,
+  MANIFEST_SIGNATURE_HEADER,
+} from "../services/worker-manifest-signature.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function boardHttpOriginFromRequest(req: Request, authPublicBaseUrl?: string): string {
-  const proto =
-    req.header("x-forwarded-proto")?.split(",")[0]?.trim() || req.protocol || "http";
-  const host = req.header("x-forwarded-host")?.split(",")[0]?.trim() || req.header("host");
-  if (host) return `${proto}://${host}`;
-  return (authPublicBaseUrl ?? "").trim().replace(/\/+$/, "");
-}
 
 function parseOptionalAgentIdQuery(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
@@ -25,21 +20,41 @@ function parseOptionalAgentIdQuery(raw: unknown): string | undefined {
   return id;
 }
 
-export function workerDownloadsRoutes(opts?: {
+export type WorkerDownloadsPluginOpts = FastifyPluginOptions & {
   authPublicBaseUrl?: string;
   workerProvisionManifestJson?: string;
   workerProvisionManifestFile?: string;
   workerProvisionManifestSigningKeyPem?: string;
-}) {
-  const router = Router();
-  const { authPublicBaseUrl } = opts ?? {};
+};
 
-  router.get("/", async (_req, res) => {
+/**
+ * Fastify-native worker-downloads plugin.
+ * Registers GET /worker-downloads, /worker-downloads/install.sh,
+ * /worker-downloads/install.ps1, /worker-downloads/provision-manifest.
+ */
+export async function workerDownloadsPlugin(
+  fastify: FastifyInstance,
+  opts: WorkerDownloadsPluginOpts,
+): Promise<void> {
+  const { authPublicBaseUrl } = opts;
+
+  function boardHttpOriginFromFastifyRequest(req: { headers: Record<string, string | string[] | undefined>; protocol?: string; hostname?: string }, baseUrl?: string): string {
+    const forwardedProto = req.headers["x-forwarded-proto"];
+    const proto = (typeof forwardedProto === "string" ? forwardedProto.split(",")[0]?.trim() : undefined)
+      ?? req.protocol ?? "http";
+    const forwardedHost = req.headers["x-forwarded-host"];
+    const host = (typeof forwardedHost === "string" ? forwardedHost.split(",")[0]?.trim() : undefined)
+      ?? req.headers["host"];
+    if (host) return `${proto}://${host}`;
+    return (baseUrl ?? "").trim().replace(/\/+$/, "");
+  }
+
+  fastify.get("/worker-downloads", async (_req, reply) => {
     try {
       const payload = await getWorkerDownloads();
-      res.json(payload);
+      return reply.send(payload);
     } catch (err) {
-      res.status(500).json({
+      return reply.status(500).send({
         tag: "",
         source: "github",
         artifacts: [],
@@ -48,62 +63,76 @@ export function workerDownloadsRoutes(opts?: {
     }
   });
 
-  router.get("/install.sh", async (req, res) => {
+  fastify.get("/worker-downloads/install.sh", async (req, reply) => {
     try {
       const payload = await getWorkerDownloads();
-      const defaultAgentId = parseOptionalAgentIdQuery(req.query.agentId);
-      const boardHttpOrigin = boardHttpOriginFromRequest(req, authPublicBaseUrl);
-      const body = buildWorkerInstallBashScript(payload, {
-        boardHttpOrigin,
-        defaultAgentId,
-      });
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.setHeader("Cache-Control", "public, max-age=300");
-      res.send(body);
+      const defaultAgentId = parseOptionalAgentIdQuery(
+        (req.query as Record<string, unknown>)["agentId"],
+      );
+      const boardHttpOrigin = boardHttpOriginFromFastifyRequest(
+        req as Parameters<typeof boardHttpOriginFromFastifyRequest>[0],
+        authPublicBaseUrl,
+      );
+      const body = buildWorkerInstallBashScript(payload, { boardHttpOrigin, defaultAgentId });
+      return reply
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .header("Cache-Control", "public, max-age=300")
+        .send(body);
     } catch {
-      res
+      return reply
         .status(503)
-        .type("text/plain")
+        .header("Content-Type", "text/plain; charset=utf-8")
         .send("#!/usr/bin/env bash\necho 'Could not build install script' >&2\nexit 1\n");
     }
   });
 
-  router.get("/install.ps1", async (req, res) => {
+  fastify.get("/worker-downloads/install.ps1", async (req, reply) => {
     try {
       const payload = await getWorkerDownloads();
-      const defaultAgentId = parseOptionalAgentIdQuery(req.query.agentId);
-      const boardHttpOrigin = boardHttpOriginFromRequest(req, authPublicBaseUrl);
-      const body = buildWorkerInstallPowerShellScript(payload, {
-        boardHttpOrigin,
-        defaultAgentId,
-      });
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.setHeader("Cache-Control", "public, max-age=300");
-      res.send(body);
+      const defaultAgentId = parseOptionalAgentIdQuery(
+        (req.query as Record<string, unknown>)["agentId"],
+      );
+      const boardHttpOrigin = boardHttpOriginFromFastifyRequest(
+        req as Parameters<typeof boardHttpOriginFromFastifyRequest>[0],
+        authPublicBaseUrl,
+      );
+      const body = buildWorkerInstallPowerShellScript(payload, { boardHttpOrigin, defaultAgentId });
+      return reply
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .header("Cache-Control", "public, max-age=300")
+        .send(body);
     } catch {
-      res.status(503).type("text/plain").send("$ErrorActionPreference = 'Stop'\nWrite-Error 'install.ps1 unavailable'\nexit 1\n");
+      return reply
+        .status(503)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .send("$ErrorActionPreference = 'Stop'\nWrite-Error 'install.ps1 unavailable'\nexit 1\n");
     }
   });
 
-  router.get("/provision-manifest", async (_req, res) => {
+  fastify.get("/worker-downloads/provision-manifest", async (_req, reply) => {
     try {
       const manifest = await loadWorkerProvisionManifest({
-        inlineJson: opts?.workerProvisionManifestJson,
-        filePath: opts?.workerProvisionManifestFile,
+        inlineJson: opts.workerProvisionManifestJson,
+        filePath: opts.workerProvisionManifestFile,
       });
       if (!manifest) {
-        res.status(404).json({ error: "Provision manifest not configured" });
-        return;
+        return reply.status(404).send({ error: "Provision manifest not configured" });
       }
-      sendSignedProvisionManifestJson(res, manifest, opts?.workerProvisionManifestSigningKeyPem, () => {
-        res.setHeader("Cache-Control", "public, max-age=120");
-      });
+      const { body, signatureHeader } = buildSignedProvisionManifestResponse(
+        manifest,
+        opts.workerProvisionManifestSigningKeyPem,
+      );
+      if (signatureHeader) {
+        reply.header(MANIFEST_SIGNATURE_HEADER, signatureHeader);
+      }
+      return reply
+        .header("Cache-Control", "public, max-age=120")
+        .type("application/json")
+        .send(body);
     } catch (err) {
-      res.status(500).json({
+      return reply.status(500).send({
         error: err instanceof Error ? err.message : String(err),
       });
     }
   });
-
-  return router;
 }

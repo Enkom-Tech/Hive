@@ -1,13 +1,11 @@
-import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { authAccounts, authUsers } from "@hive/db";
 import { hashPassword } from "better-auth/crypto";
-import type { DeploymentMode } from "@hive/shared";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
-import { validate } from "../middleware/validate.js";
 import { assertInstanceAdmin } from "./authz.js";
 
 const createInstanceUserBodySchema = z.object({
@@ -16,30 +14,28 @@ const createInstanceUserBodySchema = z.object({
   password: z.string().min(8).max(256),
 });
 
-export function instanceRoutes(
-  db: Db,
-  opts: { deploymentMode: DeploymentMode },
-) {
-  const router = Router();
+export async function instancePlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; deploymentMode: import("@hive/shared").DeploymentMode },
+): Promise<void> {
+  const { db, deploymentMode } = opts;
 
-  router.post("/users", validate(createInstanceUserBodySchema), async (req, res) => {
-    if (opts.deploymentMode !== "authenticated") {
-      throw notFound("Not found");
-    }
+  fastify.post("/api/instance/users", async (req, reply) => {
+    if (deploymentMode !== "authenticated") throw notFound("Not found");
     assertInstanceAdmin(req);
 
-    const email = req.body.email.trim().toLowerCase();
-    const name = req.body.name as string;
-    const password = req.body.password as string;
+    const parsed = createInstanceUserBodySchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+
+    const email = parsed.data.email.trim().toLowerCase();
+    const { name, password } = parsed.data;
 
     const existing = await db
       .select({ id: authUsers.id })
       .from(authUsers)
       .where(eq(authUsers.email, email))
       .then((rows) => rows[0] ?? null);
-    if (existing) {
-      throw conflict("A user with this email already exists");
-    }
+    if (existing) throw conflict("A user with this email already exists");
 
     const userId = randomUUID();
     const accountId = randomUUID();
@@ -47,15 +43,7 @@ export function instanceRoutes(
     const passwordHash = await hashPassword(password);
 
     await db.transaction(async (tx) => {
-      await tx.insert(authUsers).values({
-        id: userId,
-        name,
-        email,
-        emailVerified: true,
-        image: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      await tx.insert(authUsers).values({ id: userId, name, email, emailVerified: true, image: null, createdAt: now, updatedAt: now });
       await tx.insert(authAccounts).values({
         id: accountId,
         accountId: email,
@@ -73,12 +61,6 @@ export function instanceRoutes(
       });
     });
 
-    res.status(201).json({
-      id: userId,
-      email,
-      name,
-    });
+    return reply.status(201).send({ id: userId, email, name });
   });
-
-  return router;
 }

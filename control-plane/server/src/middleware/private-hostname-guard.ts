@@ -1,13 +1,13 @@
-import type { Request, RequestHandler } from "express";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
-function extractHostname(req: Request): string | null {
-  const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
-  const hostHeader = req.header("host")?.trim();
+function extractHostname(req: IncomingMessage): string | null {
+  const forwardedHost = (req.headers["x-forwarded-host"] as string | undefined)?.split(",")[0]?.trim();
+  const hostHeader = (req.headers["host"] ?? "").trim();
   const raw = forwardedHost || hostHeader;
   if (!raw) return null;
 
@@ -49,11 +49,17 @@ function blockedHostnameMessage(hostname: string): string {
   );
 }
 
+type NodeMiddleware = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: (err?: unknown) => void,
+) => void;
+
 export function privateHostnameGuard(opts: {
   enabled: boolean;
   allowedHostnames: string[];
   bindHost: string;
-}): RequestHandler {
+}): NodeMiddleware {
   if (!opts.enabled) {
     return (_req, _res, next) => next();
   }
@@ -65,14 +71,18 @@ export function privateHostnameGuard(opts: {
 
   return (req, res, next) => {
     const hostname = extractHostname(req);
-    const wantsJson = req.path.startsWith("/api") || req.accepts(["json", "html", "text"]) === "json";
+    const urlPath = req.url ?? "";
+    const accept = req.headers["accept"] ?? "";
+    const wantsJson = urlPath.startsWith("/api") || String(accept).includes("application/json");
 
     if (!hostname) {
       const error = "Missing Host header. If you want to allow a hostname, run pnpm hive allowed-hostname <host>.";
       if (wantsJson) {
-        res.status(403).json({ error });
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error }));
       } else {
-        res.status(403).type("text/plain").send(error);
+        res.writeHead(403, { "Content-Type": "text/plain" });
+        res.end(error);
       }
       return;
     }
@@ -84,9 +94,11 @@ export function privateHostnameGuard(opts: {
 
     const error = blockedHostnameMessage(hostname);
     if (wantsJson) {
-      res.status(403).json({ error });
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error }));
     } else {
-      res.status(403).type("text/plain").send(error);
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end(error);
     }
   };
 }

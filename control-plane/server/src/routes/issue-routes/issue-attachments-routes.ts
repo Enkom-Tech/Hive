@@ -1,176 +1,203 @@
-import type { Request, Router } from "express";
-import multer from "multer";
+import type { FastifyInstance } from "fastify";
+import fastifyMultipart from "@fastify/multipart";
 import { createIssueAttachmentMetadataSchema } from "@hive/shared";
+import type { Db } from "@hive/db";
 import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "../authz.js";
-import { logActivity } from "../../services/index.js";
+import { issueService, logActivity } from "../../services/index.js";
 import { logger } from "../../middleware/logger.js";
 import { isAllowedContentType, getMaxAttachmentBytes } from "../../attachment-types.js";
-import type { IssueRoutesContext } from "./context.js";
+import type { StorageService } from "../../storage/types.js";
 
-export function registerIssueAttachmentsRoutes(router: Router, ctx: IssueRoutesContext): void {
-  const { db, storage, svc } = ctx;
+function withContentPath<T extends { id: string }>(attachment: T) {
+  return { ...attachment, contentPath: `/api/attachments/${attachment.id}/content` };
+}
 
-  router.get("/issues/:id/attachments", async (req, res) => {
-    const issueId = req.params.id as string;
-    const issue = await svc.getById(issueId);
-    if (!issue) {
-      res.status(404).json({ error: "Issue not found" });
-      return;
-    }
-    await assertCompanyRead(db, req, issue.companyId);
-    const attachments = await svc.listAttachments(issueId);
-    res.json(attachments.map(ctx.withContentPath));
+/**
+ * Fastify-native issue attachments plugin.
+ *
+ * Handles upload, listing, content retrieval, and deletion of issue
+ * attachments.  Uses @fastify/multipart with req.parts() to consume all form
+ * parts in a single pass, regardless of field order.  The single file part is
+ * buffered in memory, matching the multer memoryStorage behaviour of the
+ * Express counterpart.
+ */
+export async function issueAttachmentsPlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; storage: StorageService },
+): Promise<void> {
+  const { db, storage } = opts;
+  const svc = issueService(db);
+
+  await fastify.register(fastifyMultipart, {
+    limits: { fileSize: getMaxAttachmentBytes(), files: 1 },
   });
 
-  router.post("/companies/:companyId/issues/:issueId/attachments", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const issueId = req.params.issueId as string;
-    await assertCompanyPermission(db, req, companyId, "issues:write");
-    const issue = await svc.getById(issueId);
-    if (!issue) {
-      res.status(404).json({ error: "Issue not found" });
-      return;
-    }
-    if (issue.companyId !== companyId) {
-      res.status(422).json({ error: "Issue does not belong to company" });
-      return;
-    }
-
-    try {
-      await ctx.runSingleFileUpload(req, res);
-    } catch (err) {
-      if (err instanceof multer.MulterError) {
-        if (err.code === "LIMIT_FILE_SIZE") {
-          res.status(422).json({ error: `Attachment exceeds ${getMaxAttachmentBytes()} bytes` });
-          return;
-        }
-        res.status(400).json({ error: err.message });
-        return;
+  fastify.get<{ Params: { id: string } }>(
+    "/api/issues/:id/attachments",
+    async (req, reply) => {
+      const issueId = req.params.id;
+      const issue = await svc.getById(issueId);
+      if (!issue) {
+        return reply.status(404).send({ error: "Issue not found" });
       }
-      throw err;
-    }
+      await assertCompanyRead(db, req, issue.companyId);
+      const attachments = await svc.listAttachments(issueId);
+      return reply.send(attachments.map(withContentPath));
+    },
+  );
 
-    const file = (req as Request & { file?: { mimetype: string; buffer: Buffer; originalname: string } }).file;
-    if (!file) {
-      res.status(400).json({ error: "Missing file field 'file'" });
-      return;
-    }
-    const contentType = (file.mimetype || "").toLowerCase();
-    if (!isAllowedContentType(contentType)) {
-      res.status(422).json({ error: `Unsupported attachment type: ${contentType || "unknown"}` });
-      return;
-    }
-    if (file.buffer.length <= 0) {
-      res.status(422).json({ error: "Attachment is empty" });
-      return;
-    }
+  fastify.post<{ Params: { companyId: string; issueId: string } }>(
+    "/api/companies/:companyId/issues/:issueId/attachments",
+    async (req, reply) => {
+      const { companyId, issueId } = req.params;
+      await assertCompanyPermission(db, req, companyId, "issues:write");
+      const issue = await svc.getById(issueId);
+      if (!issue) {
+        return reply.status(404).send({ error: "Issue not found" });
+      }
+      if (issue.companyId !== companyId) {
+        return reply.status(422).send({ error: "Issue does not belong to company" });
+      }
 
-    const parsedMeta = createIssueAttachmentMetadataSchema.safeParse(req.body ?? {});
-    if (!parsedMeta.success) {
-      res.status(400).json({ error: "Invalid attachment metadata", details: parsedMeta.error.issues });
-      return;
-    }
+      const fields: Record<string, string> = {};
+      let filePart: { buffer: Buffer; filename: string; mimetype: string } | null = null;
 
-    const actor = getActorInfo(req);
-    const stored = await storage.putFile({
-      companyId,
-      namespace: `issues/${issueId}`,
-      originalFilename: file.originalname || null,
-      contentType,
-      body: file.buffer,
-    });
+      for await (const part of req.parts()) {
+        if (part.type === "file") {
+          let buffer: Buffer;
+          try {
+            buffer = await part.toBuffer();
+          } catch (err: unknown) {
+            const e = err as { code?: string };
+            if (e?.code === "FST_REQ_FILE_TOO_LARGE") {
+              return reply.status(422).send({ error: `Attachment exceeds ${getMaxAttachmentBytes()} bytes` });
+            }
+            throw err;
+          }
+          filePart = { buffer, filename: part.filename, mimetype: part.mimetype };
+        } else {
+          fields[part.fieldname] = part.value as string;
+        }
+      }
 
-    const attachment = await svc.createAttachment({
-      issueId,
-      issueCommentId: parsedMeta.data.issueCommentId ?? null,
-      provider: stored.provider,
-      objectKey: stored.objectKey,
-      contentType: stored.contentType,
-      byteSize: stored.byteSize,
-      sha256: stored.sha256,
-      originalFilename: stored.originalFilename,
-      createdByAgentId: actor.agentId,
-      createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-    });
+      if (!filePart) {
+        return reply.status(400).send({ error: "Missing file field 'file'" });
+      }
 
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "issue.attachment_added",
-      entityType: "issue",
-      entityId: issueId,
-      details: {
-        attachmentId: attachment.id,
-        originalFilename: attachment.originalFilename,
-        contentType: attachment.contentType,
-        byteSize: attachment.byteSize,
-      },
-    });
+      const contentType = (filePart.mimetype || "").toLowerCase();
+      if (!isAllowedContentType(contentType)) {
+        return reply.status(422).send({ error: `Unsupported attachment type: ${contentType || "unknown"}` });
+      }
+      if (filePart.buffer.length <= 0) {
+        return reply.status(422).send({ error: "Attachment is empty" });
+      }
 
-    res.status(201).json(ctx.withContentPath(attachment));
-  });
+      const parsedMeta = createIssueAttachmentMetadataSchema.safeParse(fields);
+      if (!parsedMeta.success) {
+        return reply.status(400).send({ error: "Invalid attachment metadata", details: parsedMeta.error.issues });
+      }
 
-  router.get("/attachments/:attachmentId/content", async (req, res, next) => {
-    const attachmentId = req.params.attachmentId as string;
-    const attachment = await svc.getAttachmentById(attachmentId);
-    if (!attachment) {
-      res.status(404).json({ error: "Attachment not found" });
-      return;
-    }
-    await assertCompanyRead(db, req, attachment.companyId);
+      const actor = getActorInfo(req);
+      const stored = await storage.putFile({
+        companyId,
+        namespace: `issues/${issueId}`,
+        originalFilename: filePart.filename || null,
+        contentType,
+        body: filePart.buffer,
+      });
 
-    const object = await storage.getObject(attachment.companyId, attachment.objectKey);
-    res.setHeader("Content-Type", attachment.contentType || object.contentType || "application/octet-stream");
-    res.setHeader("Content-Length", String(attachment.byteSize || object.contentLength || 0));
-    res.setHeader("Cache-Control", "private, max-age=60");
-    const filename = attachment.originalFilename ?? "attachment";
-    res.setHeader("Content-Disposition", `inline; filename=\"${filename.replaceAll("\"", "")}\"`);
+      const attachment = await svc.createAttachment({
+        issueId,
+        issueCommentId: parsedMeta.data.issueCommentId ?? null,
+        provider: stored.provider,
+        objectKey: stored.objectKey,
+        contentType: stored.contentType,
+        byteSize: stored.byteSize,
+        sha256: stored.sha256,
+        originalFilename: stored.originalFilename,
+        createdByAgentId: actor.agentId,
+        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+      });
 
-    object.stream.on("error", (err) => {
-      next(err);
-    });
-    object.stream.pipe(res);
-  });
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.attachment_added",
+        entityType: "issue",
+        entityId: issueId,
+        details: {
+          attachmentId: attachment.id,
+          originalFilename: attachment.originalFilename,
+          contentType: attachment.contentType,
+          byteSize: attachment.byteSize,
+        },
+      });
 
-  router.delete("/attachments/:attachmentId", async (req, res) => {
-    const attachmentId = req.params.attachmentId as string;
-    const attachment = await svc.getAttachmentById(attachmentId);
-    if (!attachment) {
-      res.status(404).json({ error: "Attachment not found" });
-      return;
-    }
-    await assertCompanyPermission(db, req, attachment.companyId, "issues:write");
+      return reply.status(201).send(withContentPath(attachment));
+    },
+  );
 
-    try {
-      await storage.deleteObject(attachment.companyId, attachment.objectKey);
-    } catch (err) {
-      logger.warn({ err, attachmentId }, "storage delete failed while removing attachment");
-    }
+  fastify.get<{ Params: { attachmentId: string } }>(
+    "/api/attachments/:attachmentId/content",
+    async (req, reply) => {
+      const { attachmentId } = req.params;
+      const attachment = await svc.getAttachmentById(attachmentId);
+      if (!attachment) {
+        return reply.status(404).send({ error: "Attachment not found" });
+      }
+      await assertCompanyRead(db, req, attachment.companyId);
 
-    const removed = await svc.removeAttachment(attachmentId);
-    if (!removed) {
-      res.status(404).json({ error: "Attachment not found" });
-      return;
-    }
+      const object = await storage.getObject(attachment.companyId, attachment.objectKey);
+      const filename = attachment.originalFilename ?? "attachment";
+      return reply
+        .header("Content-Type", attachment.contentType || object.contentType || "application/octet-stream")
+        .header("Content-Length", String(attachment.byteSize || object.contentLength || 0))
+        .header("Cache-Control", "private, max-age=60")
+        .header("Content-Disposition", `inline; filename="${filename.replaceAll('"', '')}"`)
+        .send(object.stream);
+    },
+  );
 
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId: removed.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "issue.attachment_removed",
-      entityType: "issue",
-      entityId: removed.issueId,
-      details: {
-        attachmentId: removed.id,
-      },
-    });
+  fastify.delete<{ Params: { attachmentId: string } }>(
+    "/api/attachments/:attachmentId",
+    async (req, reply) => {
+      const { attachmentId } = req.params;
+      const attachment = await svc.getAttachmentById(attachmentId);
+      if (!attachment) {
+        return reply.status(404).send({ error: "Attachment not found" });
+      }
+      await assertCompanyPermission(db, req, attachment.companyId, "issues:write");
 
-    res.json({ ok: true });
-  });
+      try {
+        await storage.deleteObject(attachment.companyId, attachment.objectKey);
+      } catch (err) {
+        logger.warn({ err, attachmentId }, "storage delete failed while removing attachment");
+      }
+
+      const removed = await svc.removeAttachment(attachmentId);
+      if (!removed) {
+        return reply.status(404).send({ error: "Attachment not found" });
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: removed.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.attachment_removed",
+        entityType: "issue",
+        entityId: removed.issueId,
+        details: {
+          attachmentId: removed.id,
+        },
+      });
+
+      return reply.send({ ok: true });
+    },
+  );
 }

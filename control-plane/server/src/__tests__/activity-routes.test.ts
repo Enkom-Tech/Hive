@@ -1,8 +1,7 @@
-import express from "express";
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { errorHandler } from "../middleware/index.js";
-import { activityRoutes } from "../routes/activity.js";
+import type { Db } from "@hive/db";
+import { createRouteTestFastify } from "./helpers/route-app.js";
+import { activityPlugin } from "../routes/activity.js";
 
 const mockActivityService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -25,22 +24,7 @@ vi.mock("../services/index.js", () => ({
   issueService: () => mockIssueService,
 }));
 
-function createApp() {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).principal = {
-      type: "user",
-      id: "user-1",
-      company_ids: ["company-1"],
-      roles: [],
-    };
-    next();
-  });
-  app.use("/api", activityRoutes({} as any));
-  app.use(errorHandler);
-  return app;
-}
+const db = {} as unknown as Db;
 
 describe("activity routes", () => {
   beforeEach(() => {
@@ -58,12 +42,23 @@ describe("activity routes", () => {
       },
     ]);
 
-    const res = await request(createApp()).get("/api/issues/PAP-475/runs");
+    const app = await createRouteTestFastify({
+      plugin: (f) => activityPlugin(f, { db }),
+      principal: {
+        type: "user",
+        id: "user-1",
+        company_ids: ["company-1"],
+        roles: [],
+      },
+    });
 
-    expect(res.status).toBe(200);
+    const res = await app.inject({ method: "GET", url: "/api/issues/PAP-475/runs" });
+
+    expect(res.statusCode).toBe(200);
     expect(mockIssueService.getByIdentifier).toHaveBeenCalledWith("PAP-475");
     expect(mockIssueService.getById).not.toHaveBeenCalled();
     expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1");
-    expect(res.body).toEqual([{ runId: "run-1" }]);
+    expect(res.json()).toEqual([{ runId: "run-1" }]);
+    await app.close();
   });
 });

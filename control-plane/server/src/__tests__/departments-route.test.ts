@@ -1,8 +1,7 @@
-import express from "express";
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { errorHandler } from "../middleware/index.js";
-import { departmentRoutes } from "../routes/departments.js";
+import type { Db } from "@hive/db";
+import { createRouteTestFastify } from "./helpers/route-app.js";
+import { departmentsPlugin } from "../routes/departments.js";
 
 const mockDepartmentsService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -34,17 +33,7 @@ vi.mock("../services/index.js", () => ({
   logActivity: mockLogActivity,
 }));
 
-function makeApp(principal: any) {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).principal = principal;
-    next();
-  });
-  app.use("/api", departmentRoutes({} as any));
-  app.use(errorHandler);
-  return app;
-}
+const db = {} as unknown as Db;
 
 describe("department routes", () => {
   beforeEach(() => {
@@ -61,39 +50,48 @@ describe("department routes", () => {
 
   it("denies create when user lacks departments:manage", async () => {
     mockAccessService.canUser.mockResolvedValue(false);
-    const app = makeApp({
-      type: "user",
-      id: "user-1",
-      company_ids: ["company-1"],
-      roles: [],
+    const app = await createRouteTestFastify({
+      plugin: (f) => departmentsPlugin(f, { db }),
+      principal: {
+        type: "user",
+        id: "user-1",
+        company_ids: ["company-1"],
+        roles: [],
+      },
     });
 
-    const res = await request(app).post("/api/companies/company-1/departments").send({
-      name: "Engineering",
-      slug: "engineering",
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/companies/company-1/departments",
+      payload: { name: "Engineering", slug: "engineering" },
     });
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toContain("departments:manage");
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("departments:manage");
+    await app.close();
   });
 
   it("allows create when system principal is used", async () => {
-    const app = makeApp({
-      type: "system",
-      id: "system",
-      company_ids: ["company-1"],
-      roles: ["instance_admin"],
+    const app = await createRouteTestFastify({
+      plugin: (f) => departmentsPlugin(f, { db }),
+      principal: {
+        type: "system",
+        id: "system",
+        roles: ["instance_admin"],
+      },
     });
 
-    const res = await request(app).post("/api/companies/company-1/departments").send({
-      name: "Engineering",
-      slug: "engineering",
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/companies/company-1/departments",
+      payload: { name: "Engineering", slug: "engineering" },
     });
 
-    expect(res.status).toBe(201);
+    expect(res.statusCode).toBe(201);
     expect(mockDepartmentsService.create).toHaveBeenCalledWith("company-1", {
       name: "Engineering",
       slug: "engineering",
     });
+    await app.close();
   });
 });

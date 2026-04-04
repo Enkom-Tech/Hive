@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import express from "express";
-import request from "supertest";
+import Fastify from "fastify";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,32 +13,56 @@ describe("logger request redaction", () => {
     vi.resetModules();
     const { httpLogger, logger } = await import("../middleware/logger.js");
 
-    const app = express();
-    app.use(express.json());
-    app.use(httpLogger);
-    app.post("/test", (_req, res) => {
-      res.status(400).json({ error: "bad" });
+    const app = Fastify({ logger: false });
+
+    // Register pino-http. It must run after body parsing so that customProps
+    // can read req.body/req.query from the raw request. We copy Fastify's parsed
+    // body/query onto req.raw in a preHandler so the logger serializer can see them.
+    app.addHook("preHandler", (req, reply, done) => {
+      const raw = req.raw as typeof req.raw & {
+        body?: unknown;
+        query?: unknown;
+        params?: unknown;
+      };
+      raw.body = req.body;
+      raw.query = req.query;
+      raw.params = req.params;
+      httpLogger(raw, reply.raw, done);
     });
+
+    app.post("/test", async (_req, reply) => {
+      return reply.status(400).send({ error: "bad" });
+    });
+
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const port = (app.server.address() as { port: number }).port;
 
     const jwtLike = "abc.def.ghi";
     const apiKeyLike = "super-secret-api-key";
 
-    await request(app)
-      .post("/test")
-      .query({ token: jwtLike })
-      .send({
-        authorization: `Bearer ${jwtLike}`,
-        api_key: apiKeyLike,
-        nested: { password: "hunter2" },
-      })
-      .expect(400);
+    try {
+      await fetch(
+        `http://127.0.0.1:${port}/test?token=${encodeURIComponent(jwtLike)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            authorization: `Bearer ${jwtLike}`,
+            api_key: apiKeyLike,
+            nested: { password: "hunter2" },
+          }),
+        },
+      );
+    } finally {
+      await app.close();
+    }
 
     await new Promise<void>((resolve) => {
       logger.flush(() => resolve());
     });
 
     const logFile = path.join(tmpLogDir, "server.log");
-    // pino transport may create/write the file slightly after request completion.
     const deadlineMs = Date.now() + 500;
     while (!fs.existsSync(logFile) && Date.now() < deadlineMs) {
       await new Promise<void>((r) => setTimeout(r, 25));
@@ -54,4 +77,3 @@ describe("logger request redaction", () => {
     expect(logText).not.toContain("hunter2");
   });
 });
-

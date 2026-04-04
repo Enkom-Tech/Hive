@@ -1,10 +1,10 @@
-import { Router } from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { companyRoutes } from "../routes/companies/index.js";
-import { createRouteTestApp, principalBoard } from "./helpers/route-app.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
+import type { Db } from "@hive/db";
+import { companiesPlugin } from "../routes/companies/index.js";
+import { createRouteTestFastify, principalBoard } from "./helpers/route-app.js";
 
-const mockDb = {} as import("@hive/db").Db;
+const mockDb = {} as Db;
 
 const companyA = "550e8400-e29b-41d4-a716-446655440000";
 
@@ -33,18 +33,6 @@ const listWorkerIdentitySlots = vi.fn(() =>
 );
 
 const getWorkerIdentityAutomationStatus = vi.fn();
-
-function apiRouter() {
-  const r = Router();
-  r.use(
-    "/companies",
-    companyRoutes(mockDb, {
-      workerIdentityAutomationEnabled: true,
-      apiPublicBaseUrl: "https://board.example.com",
-    }),
-  );
-  return r;
-}
 
 vi.mock("../services/index.js", () => ({
   companyService: () => ({
@@ -83,6 +71,8 @@ vi.mock("../services/index.js", () => ({
 }));
 
 describe("worker identity slots routes (authz shape)", () => {
+  let app: FastifyInstance;
+
   beforeEach(() => {
     vi.clearAllMocks();
     getWorkerIdentityAutomationStatus.mockResolvedValue({
@@ -92,25 +82,39 @@ describe("worker identity slots routes (authz shape)", () => {
     });
   });
 
+  afterEach(async () => {
+    await app?.close();
+  });
+
   it("lists slots for allowed company", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(),
+    app = await createRouteTestFastify({
+      plugin: async (fastify) =>
+        companiesPlugin(fastify, {
+          db: mockDb,
+          workerIdentityAutomationEnabled: true,
+          apiPublicBaseUrl: "https://board.example.com",
+        }),
       principal: principalBoard({ companyIds: [companyA] }),
     });
-    const res = await request(app).get(`/api/companies/${companyA}/worker-identity-slots`);
-    expect(res.status).toBe(200);
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/worker-identity-slots` });
+    expect(res.statusCode).toBe(200);
     expect(listWorkerIdentitySlots).toHaveBeenCalledWith(companyA);
-    expect(res.body.slots).toHaveLength(1);
-    expect(res.body.slots[0].profileKey).toBe("eng");
+    expect(res.json().slots).toHaveLength(1);
+    expect(res.json().slots[0].profileKey).toBe("eng");
   });
 
   it("returns 403 for company outside principal", async () => {
-    const app = createRouteTestApp({
-      router: apiRouter(),
+    app = await createRouteTestFastify({
+      plugin: async (fastify) =>
+        companiesPlugin(fastify, {
+          db: mockDb,
+          workerIdentityAutomationEnabled: true,
+          apiPublicBaseUrl: "https://board.example.com",
+        }),
       principal: principalBoard({ companyIds: ["00000000-0000-0000-0000-000000000001"] }),
     });
-    const res = await request(app).get(`/api/companies/${companyA}/worker-identity-slots`);
-    expect(res.status).toBe(403);
+    const res = await app.inject({ method: "GET", url: `/api/companies/${companyA}/worker-identity-slots` });
+    expect(res.statusCode).toBe(403);
     expect(listWorkerIdentitySlots).not.toHaveBeenCalled();
   });
 });

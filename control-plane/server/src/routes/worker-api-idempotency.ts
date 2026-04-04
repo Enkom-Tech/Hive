@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { Request } from "express";
 import { badRequest } from "../errors.js";
+import type { HeaderCarrier } from "./authz.js";
 
 export const WORKER_API_IDEMPOTENCY_ROUTES = {
   issueCreate: "issue_create",
@@ -31,8 +31,9 @@ export function workerApiIdempotencyAdvisoryKeys(
  * Optional `X-Hive-Worker-Idempotency-Key`: printable ASCII, trimmed, max 128 chars.
  * Absent header → null. Present but empty/invalid → throws badRequest.
  */
-export function parseWorkerApiIdempotencyKey(req: Request): string | null {
-  const raw = req.get("X-Hive-Worker-Idempotency-Key");
+export function parseWorkerApiIdempotencyKey(req: HeaderCarrier): string | null {
+  const rawVal = req.headers["x-hive-worker-idempotency-key"];
+  const raw = Array.isArray(rawVal) ? rawVal[0] : rawVal;
   if (raw === undefined) return null;
   const v = raw.trim();
   if (v.length === 0) {

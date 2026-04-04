@@ -1,8 +1,7 @@
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@hive/db";
-import { createRouteTestApp, actorBoard, actorAgent } from "./helpers/route-app.js";
-import { dashboardRoutes } from "../routes/dashboard.js";
+import { createRouteTestFastify, actorBoard, actorAgent } from "./helpers/route-app.js";
+import { dashboardPlugin } from "../routes/dashboard.js";
 
 const mockDashboardService = vi.hoisted(() => ({
   summary: vi.fn(),
@@ -32,36 +31,39 @@ describe("dashboard route", () => {
   describe("GET /api/companies/:companyId/dashboard", () => {
     it("returns 200 with summary when actor has company access", async () => {
       mockDashboardService.summary.mockResolvedValue(summaryPayload);
-      const app = createRouteTestApp({
-        router: dashboardRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => dashboardPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app).get(`/api/companies/${company1}/dashboard`);
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(summaryPayload);
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/dashboard` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(summaryPayload);
       expect(mockDashboardService.summary).toHaveBeenCalledWith(company1);
+      await app.close();
     });
 
     it("returns 403 when agent calls with another company", async () => {
-      const app = createRouteTestApp({
-        router: dashboardRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => dashboardPlugin(f, { db }),
         principal: actorAgent(company2),
       });
-      const res = await request(app).get(`/api/companies/${company1}/dashboard`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/dashboard` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
       expect(mockDashboardService.summary).not.toHaveBeenCalled();
+      await app.close();
     });
 
     it("returns 403 when board user has no access to company", async () => {
-      const app = createRouteTestApp({
-        router: dashboardRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => dashboardPlugin(f, { db }),
         principal: actorBoard([company2]),
       });
-      const res = await request(app).get(`/api/companies/${company1}/dashboard`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/dashboard` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
       expect(mockDashboardService.summary).not.toHaveBeenCalled();
+      await app.close();
     });
   });
 });

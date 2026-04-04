@@ -1,8 +1,7 @@
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@hive/db";
-import { createRouteTestApp, actorBoard, actorAgent } from "./helpers/route-app.js";
-import { goalRoutes } from "../routes/goals.js";
+import { createRouteTestFastify, actorBoard, actorAgent } from "./helpers/route-app.js";
+import { goalsPlugin } from "../routes/goals.js";
 
 const mockGoalService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -35,101 +34,113 @@ describe("goals route", () => {
   describe("GET /api/companies/:companyId/goals", () => {
     it("returns 200 with list when board has company access", async () => {
       mockGoalService.list.mockResolvedValue([goalPayload]);
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app).get(`/api/companies/${company1}/goals`);
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual([goalPayload]);
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/goals` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([goalPayload]);
       expect(mockGoalService.list).toHaveBeenCalledWith(company1);
+      await app.close();
     });
 
     it("returns 403 when agent calls with another company", async () => {
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorAgent(company2),
       });
-      const res = await request(app).get(`/api/companies/${company1}/goals`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/goals` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
       expect(mockGoalService.list).not.toHaveBeenCalled();
+      await app.close();
     });
 
     it("returns 403 when board user has no access to company", async () => {
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorBoard([company2]),
       });
-      const res = await request(app).get(`/api/companies/${company1}/goals`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
+      const res = await app.inject({ method: "GET", url: `/api/companies/${company1}/goals` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
       expect(mockGoalService.list).not.toHaveBeenCalled();
+      await app.close();
     });
   });
 
   describe("GET /api/goals/:id", () => {
     it("returns 200 with goal when found and actor has access", async () => {
       mockGoalService.getById.mockResolvedValue(goalPayload);
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app).get(`/api/goals/${goalId}`);
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(goalPayload);
+      const res = await app.inject({ method: "GET", url: `/api/goals/${goalId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(goalPayload);
       expect(mockGoalService.getById).toHaveBeenCalledWith(goalId);
+      await app.close();
     });
 
     it("returns 404 when goal not found", async () => {
       mockGoalService.getById.mockResolvedValue(null);
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app).get(`/api/goals/${goalId}`);
-      expect(res.status).toBe(404);
-      expect(res.body).toMatchObject({ error: "Goal not found" });
+      const res = await app.inject({ method: "GET", url: `/api/goals/${goalId}` });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ error: "Goal not found" });
+      await app.close();
     });
 
     it("returns 403 when goal belongs to company actor cannot access", async () => {
       mockGoalService.getById.mockResolvedValue(goalPayload);
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorBoard([company2]),
       });
-      const res = await request(app).get(`/api/goals/${goalId}`);
-      expect(res.status).toBe(403);
-      expect(res.body).toMatchObject({ error: expect.any(String) });
+      const res = await app.inject({ method: "GET", url: `/api/goals/${goalId}` });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
+      await app.close();
     });
   });
 
   describe("POST /api/companies/:companyId/goals", () => {
     it("returns 201 with created goal on success", async () => {
       mockGoalService.create.mockResolvedValue(goalPayload);
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorBoard([company1]),
       });
-      const res = await request(app)
-        .post(`/api/companies/${company1}/goals`)
-        .send({ title: "New Goal" });
-      expect(res.status).toBe(201);
-      expect(res.body).toEqual(goalPayload);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/companies/${company1}/goals`,
+        payload: { title: "New Goal" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toEqual(goalPayload);
       expect(mockGoalService.create).toHaveBeenCalledWith(company1, expect.objectContaining({ title: "New Goal" }));
       expect(mockLogActivity).toHaveBeenCalled();
+      await app.close();
     });
 
     it("returns 403 when agent calls with another company", async () => {
-      const app = createRouteTestApp({
-        router: goalRoutes(db),
+      const app = await createRouteTestFastify({
+        plugin: (f) => goalsPlugin(f, { db }),
         principal: actorAgent(company2),
       });
-      const res = await request(app)
-        .post(`/api/companies/${company1}/goals`)
-        .send({ title: "New Goal" });
-      expect(res.status).toBe(403);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/companies/${company1}/goals`,
+        payload: { title: "New Goal" },
+      });
+      expect(res.statusCode).toBe(403);
       expect(mockGoalService.create).not.toHaveBeenCalled();
+      await app.close();
     });
   });
 });

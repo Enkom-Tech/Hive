@@ -1,5 +1,5 @@
-import type { Request } from "express";
 import { encodeValueToToon } from "../utils/toon-encode.js";
+import type { HeaderCarrier } from "./authz.js";
 
 /** Global default from env (operator). */
 function envWantsToon(): boolean {
@@ -10,7 +10,7 @@ function envWantsToon(): boolean {
  * Per-request TOON for worker-api success payloads (DRONE-SPEC §8).
  * Negotiation: env, or header X-Hive-Agent-Payload-Format: toon, or Accept containing application/x-hive-toon.
  */
-export function wantsAgentPayloadToon(req: Request): boolean {
+export function wantsAgentPayloadToon(req: HeaderCarrier): boolean {
   if (envWantsToon()) {
     return true;
   }
@@ -28,7 +28,7 @@ export function workerApiSuccessJsonBody(result: unknown): { ok: true; result: u
 }
 
 /** HTTP response body for a successful worker-api call (JSON or TOON string in result). */
-export function buildWorkerApiSuccessResponse(req: Request, result: unknown): { ok: true; result: unknown } | { ok: true; format: "toon"; result: string } {
+export function buildWorkerApiSuccessResponse(req: HeaderCarrier, result: unknown): { ok: true; result: unknown } | { ok: true; format: "toon"; result: string } {
   if (wantsAgentPayloadToon(req)) {
     return { ok: true, format: "toon", result: encodeValueToToon(result) };
   }
@@ -39,7 +39,7 @@ export function buildWorkerApiSuccessResponse(req: Request, result: unknown): { 
  * On idempotency replay, DB holds JSON `{ ok, result }`. Re-encode to TOON if the client negotiates it.
  */
 export function adaptReplayedWorkerApiBody(
-  req: Request,
+  req: HeaderCarrier,
   body: unknown,
 ): unknown {
   if (!wantsAgentPayloadToon(req) || body === null || typeof body !== "object") {

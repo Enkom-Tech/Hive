@@ -1,14 +1,12 @@
 /// <reference path="./types/fastify.d.ts" />
 /**
- * Fastify application factory.
+ * Fastify application factory — sole HTTP entry point for the control plane.
  *
- * Mirrors the signature of createApp in app.ts so index.ts can switch between
- * implementations via the HIVE_USE_FASTIFY env flag.
- *
- * Phase 2: global middleware (CORS, CSP nonce, Helmet, rate-limit, body
- * parsing, principal, board-mutation-guard, sign-up gate, auth routes).
- * Phase 3: Express routes mounted via @fastify/middie adapter shim.
- * Phase 4: Vite / static UI.
+ * Architecture:
+ *   Core hooks  (CORS, CSP, Helmet, hostname guard, rate-limit, principal)
+ *   Auth layer  (Better Auth + sign-up gate)
+ *   Domain routes (Fastify plugins)
+ *   UI layer    (@fastify/static or Vite dev middleware)
  */
 import path from "node:path";
 import fs from "node:fs";
@@ -20,7 +18,6 @@ import fastifyHelmet from "@fastify/helmet";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyMiddie from "@fastify/middie";
 import fastifyStatic from "@fastify/static";
-import express, { Router } from "express";
 import { count } from "drizzle-orm";
 import { ZodError } from "zod";
 import type { Db } from "@hive/db";
@@ -32,15 +29,48 @@ import { HttpError } from "./errors.js";
 import { issueBoardJwt } from "./auth/board-jwt.js";
 import { LOCAL_BOARD_USER_ID } from "./board-claim.js";
 import { logger } from "./middleware/logger.js";
-import { initPlacementPrometheus } from "./placement-metrics.js";
+import { initPlacementPrometheus, renderPlacementPrometheusScrape } from "./placement-metrics.js";
 import { resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { ensureCspNonceOnScriptOpeningTags } from "./middleware/csp-nonce.js";
 import { startPluginSupervisorRuntime } from "./services/plugin-supervisor.js";
-import type { PrincipalResolver } from "./middleware/auth.js";
-import { registerMainApiRoutes } from "./routes/register-main-api-routes.js";
-import { llmRoutes } from "./routes/llms.js";
-import { registerGithubWebhookBeforeJson } from "./routes/integrations-github.js";
+import type { FastifyPrincipalResolver } from "./middleware/auth.js";
+import { githubWebhookPlugin } from "./routes/integrations-github.js";
+import { llmPlugin } from "./routes/llms.js";
+import { companyEventsSSEPlugin } from "./routes/events-sse.js";
+import { healthPlugin } from "./routes/health.js";
+import { releasesPlugin } from "./routes/releases.js";
+import { workerDownloadsPlugin } from "./routes/worker-downloads.js";
+import { workerApiPlugin } from "./routes/worker-api/index.js";
+import {
+  internalHiveTrainingCallbackPlugin,
+  internalHiveOperatorPlugin,
+} from "./routes/internal-hive.js";
+import { pluginHostPlugin } from "./routes/plugin-host.js";
+import { e2eMcpSmokePlugin } from "./routes/e2e-mcp-smoke.js";
+import { assetsPlugin } from "./routes/assets.js";
+import { issueAttachmentsPlugin } from "./routes/issue-routes/issue-attachments-routes.js";
+import { companiesPlugin } from "./routes/companies/index.js";
+import { agentsPlugin } from "./routes/agents/index.js";
+import { issuesPlugin } from "./routes/issue-routes/index.js";
+import { accessPlugin } from "./routes/access.js";
+import { workloadPlugin } from "./routes/workload.js";
+import { standupPlugin } from "./routes/standup.js";
+import { dashboardPlugin } from "./routes/dashboard.js";
+import { sidebarBadgesPlugin } from "./routes/sidebar-badges.js";
+import { goalsPlugin } from "./routes/goals.js";
+import { activityPlugin } from "./routes/activity.js";
+import { pluginBoardPlugin } from "./routes/plugins.js";
+import { webhookDeliveriesPlugin } from "./routes/webhook-deliveries.js";
+import { connectPlugin } from "./routes/connect.js";
+import { instancePlugin } from "./routes/instance.js";
+import { costsPlugin } from "./routes/costs.js";
+import { secretsPlugin } from "./routes/secrets.js";
+import { projectsPlugin } from "./routes/projects.js";
+import { departmentsPlugin } from "./routes/departments.js";
+import { approvalsPlugin } from "./routes/approvals.js";
+import { instanceStatusPlugin } from "./routes/instance-status.js";
+import { workerPairingPublicPlugin } from "./routes/worker-pairing-public.js";
 
 export type UiMode = "none" | "static" | "vite-dev";
 
@@ -80,20 +110,19 @@ export type CreateAppOpts = {
   authPublicBaseUrl?: string;
   authDisableSignUp: boolean;
   /**
-   * Fastify path: the raw Better Auth instance, not an Express RequestHandler.
+   * The raw Better Auth instance, not an Express RequestHandler.
    * Passed through from bootstrap/auth.ts via betterAuthInstance.
    */
   betterAuthInstance?: unknown;
   /**
-   * Express-style session resolver — used by the SSE handler and other Express
-   * routes mounted via the middie adapter shim during Phase 3.
-   */
-  resolveSession?: ((req: import("express").Request) => Promise<BetterAuthSessionResult | null>) | undefined;
-  /**
-   * Fetch-style session resolver — used by Fastify-native auth hooks.
+   * Fetch-style session resolver — used by Fastify-native auth hooks and
+   * the Better Auth request bridge.
    */
   resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
-  principalResolver: PrincipalResolver;
+  /**
+   * Fastify-native principal resolver.
+   */
+  principalResolver: FastifyPrincipalResolver;
   activeDatabaseConnectionString?: string;
 };
 
@@ -201,6 +230,16 @@ function buildFastifyErrorHandler() {
 
     if (err instanceof ZodError) {
       void reply.status(400).send({ error: "Validation error", details: err.issues });
+      return;
+    }
+
+    // @fastify/rate-limit throws Error instances with a numeric statusCode.
+    // Handle them here so they propagate with the correct HTTP status.
+    const httpErr = err as { statusCode?: number; message?: string; retryAfter?: string };
+    if (typeof httpErr?.statusCode === "number" && httpErr.statusCode < 500) {
+      const body: Record<string, unknown> = { error: httpErr.message ?? "Request failed" };
+      if (httpErr.retryAfter) body.retryAfter = httpErr.retryAfter;
+      void reply.status(httpErr.statusCode).send(body);
       return;
     }
 
@@ -356,6 +395,17 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
   }
 
   // ── Rate limiting ─────────────────────────────────────────────────────────
+  // Limits are only applied in authenticated (non-loopback) and public modes.
+  // local_trusted and loopback-authenticated deployments are exempt to avoid
+  // disrupting rapid developer iteration.
+  //
+  // Two tiers are enforced on the /api prefix:
+  //   - General: rateLimitMax per window (e.g. 300 req/min)
+  //   - Sensitive: sensitiveMax per window (≤30, default 1/5 of general)
+  //
+  // The sensitive tier covers auth, provisioning, enrollment, and key routes.
+  // NOTE: For multi-replica deployments, configure a Redis store via
+  // HIVE_RATE_LIMIT_STORE_URL so limits are shared across replicas.
   const applyApiRateLimit =
     opts.deploymentMode !== "local_trusted" &&
     !(opts.deploymentMode === "authenticated" && isLoopbackBindHost(opts.bindHost));
@@ -364,7 +414,7 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
     const { rateLimitWindowMs, rateLimitMax } = opts;
     const sensitiveMax = Math.min(30, Math.max(10, Math.floor(rateLimitMax / 5)));
 
-    // Sensitive routes: lower limit. Uses keyGenerator on URL to distinguish.
+    // Patterns that identify sensitive paths subject to the lower rate limit.
     const sensitivePrefixes = [
       "/api/auth/",
       "/api/instance/",
@@ -387,49 +437,48 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
       /^\/api\/internal\/plugin-host\//,
     ];
 
-    await fastify.register(fastifyRateLimit, {
-      global: false, // per-route; we apply in an onRequest hook
-    });
-
-    fastify.addHook("onRequest", async (req, reply) => {
-      const urlPath = req.url.split("?")[0] ?? "";
-      if (!urlPath.startsWith("/api")) return;
-      if (urlPath === "/api/health" || urlPath === "/api/health/") return;
-
-      const isSensitive =
+    function isSensitivePath(urlPath: string): boolean {
+      return (
         sensitivePrefixes.some((p) => urlPath.startsWith(p)) ||
-        sensitivePatterns.some((r) => r.test(urlPath));
+        sensitivePatterns.some((r) => r.test(urlPath))
+      );
+    }
 
-      const max = isSensitive ? sensitiveMax : rateLimitMax;
-
-      // Manual rate limit check using built-in store
-      const key = `rl:${req.ip}:${isSensitive ? "s" : "g"}`;
-      const store = (fastify as unknown as { rateLimitStore?: Map<string, { count: number; expiry: number }> }).rateLimitStore;
-      if (store) {
-        const now = Date.now();
-        const entry = store.get(key);
-        if (entry && entry.expiry > now) {
-          if (entry.count >= max) {
-            void reply.status(429).send({ error: "Too many requests" });
-            return;
-          }
-          entry.count++;
-        } else {
-          store.set(key, { count: 1, expiry: now + rateLimitWindowMs });
-        }
-      }
+    // Register @fastify/rate-limit in global mode with a keyGenerator that
+    // produces a compound key of (ip, tier) so each tier has its own bucket.
+    // Health and non-/api paths are excluded via allowList so they are never
+    // counted.  The max limit per bucket is resolved per-request.
+    await fastify.register(fastifyRateLimit, {
+      global: true,
+      timeWindow: rateLimitWindowMs,
+      max: (req) => {
+        const urlPath = (req.url ?? "").split("?")[0] ?? "";
+        return isSensitivePath(urlPath) ? sensitiveMax : rateLimitMax;
+      },
+      allowList: (req) => {
+        const urlPath = (req.url ?? "").split("?")[0] ?? "";
+        return !urlPath.startsWith("/api") || urlPath === "/api/health" || urlPath === "/api/health/";
+      },
+      keyGenerator: (req) => {
+        const urlPath = (req.url ?? "").split("?")[0] ?? "";
+        const tier = isSensitivePath(urlPath) ? "s" : "g";
+        return `rl:${req.ip ?? "unknown"}:${tier}`;
+      },
+      // The builder must return an Error (not a plain object) so Fastify's
+      // error handler receives it with err.statusCode set to 429.
+      errorResponseBuilder: (_req, context) => {
+        const err = new Error(`Too many requests`) as Error & { statusCode: number; retryAfter: string };
+        err.statusCode = context.statusCode;
+        err.retryAfter = context.after;
+        return err;
+      },
     });
-
-    // Attach an in-process store since we're managing it manually above
-    (fastify as unknown as { rateLimitStore: Map<string, { count: number; expiry: number }> }).rateLimitStore = new Map();
   }
 
   // ── Principal resolution ──────────────────────────────────────────────────
   fastify.addHook("onRequest", async (req, _reply) => {
     try {
-      // Adapt Fastify request to a minimal Express-compatible shape for the existing resolver
-      const adaptedReq = req as unknown as Parameters<PrincipalResolver>[0];
-      req.principal = await opts.principalResolver(adaptedReq);
+      req.principal = await opts.principalResolver(req);
     } catch {
       req.principal = null;
     }
@@ -488,8 +537,11 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
       }
     });
 
-    // All /api/auth/* routes handled by Better Auth
-    fastify.all("/api/auth/*", async (req, reply) => {
+    // All /api/auth/* routes handled by Better Auth.
+    // We construct a standards-compliant Fetch Request from the raw Node
+    // IncomingMessage so Better Auth receives the original body bytes
+    // regardless of content-type (JSON, form, multipart).
+    fastify.all("/api/auth/*", { config: { rawBody: true } }, async (req, reply) => {
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
         if (!value) continue;
@@ -501,12 +553,30 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
       }
 
       const url = `${req.protocol}://${req.hostname}${req.url}`;
+
+      // Forward the request body to Better Auth preserving the original bytes.
+      // Better Auth handles its own content-type parsing (JSON, form-urlencoded,
+      // multipart) so we must not re-serialise an already-parsed req.body.
+      let bodyStr: string | undefined;
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        // rawBody is a Buffer populated by Fastify's addContentTypeParser for
+        // routes with config.rawBody = true.  If available, decode to string
+        // so the original encoding (UTF-8) is preserved end-to-end.
+        const raw = (req as unknown as { rawBody?: Buffer }).rawBody;
+        if (raw && raw.length > 0) {
+          bodyStr = raw.toString("utf8");
+        } else if (req.body !== undefined && req.body !== null) {
+          const ct = (req.headers["content-type"] ?? "").toLowerCase();
+          if (ct.startsWith("application/json")) {
+            bodyStr = JSON.stringify(req.body);
+          }
+        }
+      }
+
       const fetchReq = new Request(url, {
         method: req.method,
         headers,
-        body: req.method !== "GET" && req.method !== "HEAD"
-          ? JSON.stringify(req.body)
-          : undefined,
+        body: bodyStr,
       });
 
       const response = await auth.handler(fetchReq);
@@ -547,48 +617,163 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
     void reply.status(404).send({ error: "Not found" });
   });
 
-  // ── Express route adapter (Phase 3) ─────────────────────────────────────
-  // Mount the existing Express routers via @fastify/middie until they are
-  // progressively converted to Fastify plugins in subsequent phases.
-  await fastify.register(fastifyMiddie);
+  // ── Fastify-native domain plugins ────────────────────────────────────────
+  // Each migrated route batch is registered here, above the Express bridge.
+  // These routes are handled by Fastify directly and never fall through to
+  // the Express sub-app.
 
-  // Bridge req.principal from Fastify to the Express Request so existing
-  // Express route handlers can read req.principal as expected.
-  const expressApp = express();
-  expressApp.use((req, _res, next) => {
-    // The Fastify request has already resolved principal; copy it to the
-    // Express-compatible req object that middie creates.
-    (req as express.Request & { principal: Principal | null }).principal =
-      (req as unknown as FastifyRequest).principal ?? null;
-    next();
+  // PR 2: Infrastructure routes (health, releases, worker-downloads, metrics)
+  await fastify.register(healthPlugin, {
+    db,
+    deploymentMode: opts.deploymentMode,
+    deploymentExposure: opts.deploymentExposure,
+    authReady: opts.authReady,
+    companyDeletionEnabled: opts.companyDeletionEnabled,
+    authDisableSignUp: opts.authDisableSignUp,
   });
 
-  // GitHub webhook (raw body, before JSON parser)
-  registerGithubWebhookBeforeJson(expressApp, db, {
+  await fastify.register(releasesPlugin);
+
+  await fastify.register(workerDownloadsPlugin, {
+    authPublicBaseUrl: opts.authPublicBaseUrl,
+    workerProvisionManifestJson: opts.workerProvisionManifestJson,
+    workerProvisionManifestFile: opts.workerProvisionManifestFile,
+    workerProvisionManifestSigningKeyPem: opts.workerProvisionManifestSigningKeyPem,
+  });
+
+  if (opts.metricsEnabled) {
+    fastify.get("/api/metrics", async (_req, reply) => {
+      const out = await renderPlacementPrometheusScrape();
+      if (!out) {
+        return reply.status(503).send({ error: "Metrics unavailable" });
+      }
+      return reply.status(200).header("Content-Type", out.contentType).send(out.body);
+    });
+  }
+
+  // PR 3: GitHub webhook (Fastify-native, route-scoped raw-body parser)
+  await fastify.register(githubWebhookPlugin, {
     enabled: opts.vcsGitHubWebhookEnabled,
     secret: opts.vcsGitHubWebhookSecret,
     allowedRepos: opts.vcsGitHubAllowedRepos,
+    db,
   });
 
-  expressApp.use(express.json());
+  // PR 3: LLM agent-configuration reflection routes
+  await fastify.register(llmPlugin, { db });
 
-  // LLM routes (outside /api prefix in Express)
-  expressApp.use(llmRoutes(db));
-
-  // Main API routes
-  const api = Router();
-  registerMainApiRoutes(api, db, opts.storageService, {
-    ...opts,
-    resolveSession: opts.resolveSession,
-  });
-  expressApp.use("/api", api);
-  expressApp.use("/api", (_req, res) => {
-    res.status(404).json({ error: "API route not found" });
+  // PR 3: Company events SSE
+  await fastify.register(companyEventsSSEPlugin, {
+    db,
+    deploymentMode: opts.deploymentMode,
+    resolveSessionFromHeaders: opts.resolveSessionFromHeaders,
   });
 
-  fastify.use(expressApp);
+  // PR 4: Worker API (drone JWT bearer auth, idempotency preserved)
+  await fastify.register(
+    async (instance) => {
+      await workerApiPlugin(instance, { db, secretsStrictMode: opts.secretsStrictMode });
+    },
+    { prefix: "/api/worker-api" },
+  );
 
-  // ── Static / Vite dev UI (Phase 4) ────────────────────────────────────────
+  // PR 4: Internal Hive routes (training callbacks, operator endpoints)
+  await fastify.register(internalHiveTrainingCallbackPlugin, {
+    db,
+    internalOperatorSecret: opts.internalHiveOperatorSecret,
+  });
+  if (opts.internalHiveOperatorSecret?.trim()) {
+    await fastify.register(internalHiveOperatorPlugin, {
+      db,
+      operatorSecret: opts.internalHiveOperatorSecret.trim(),
+    });
+  }
+
+  // PR 4: Plugin host RPC
+  if (opts.pluginHostSecret?.trim()) {
+    await fastify.register(pluginHostPlugin, {
+      db,
+      hostSecret: opts.pluginHostSecret.trim(),
+    });
+  }
+
+  // PR 4: E2E MCP smoke (local_trusted only)
+  if (opts.deploymentMode === "local_trusted" && opts.e2eMcpSmokeMaterializeSecret?.trim()) {
+    await fastify.register(e2eMcpSmokePlugin, {
+      db,
+      materializeSecret: opts.e2eMcpSmokeMaterializeSecret.trim(),
+      serverPort: opts.serverPort,
+    });
+  }
+
+  // ── PR 5: File upload routes (assets + issue attachments) ─────────────────
+  // NOTE: /api/companies/:companyId/assets migrated in PR 5.
+  // NOTE: /api/issues/:id/attachments and /api/attachments/:attachmentId migrated in PR 5.
+  await fastify.register(assetsPlugin, { db, storage: opts.storageService });
+  await fastify.register(issueAttachmentsPlugin, { db, storage: opts.storageService });
+
+  // PR 4: Worker pairing public (unauthenticated: drone POST/GET /api/worker-pairing/requests)
+  await fastify.register(workerPairingPublicPlugin, { db });
+
+  // ── PR 7: Complex domain route plugins ───────────────────────────────────
+  await fastify.register(agentsPlugin, { db, strictSecretsMode: opts.secretsStrictMode });
+  await fastify.register(issuesPlugin, { db, storage: opts.storageService });
+  await fastify.register(accessPlugin, {
+    db,
+    deploymentMode: opts.deploymentMode,
+    deploymentExposure: opts.deploymentExposure,
+    bindHost: opts.bindHost,
+    allowedHostnames: opts.allowedHostnames,
+    joinAllowedAdapterTypes: opts.joinAllowedAdapterTypes,
+  });
+  await fastify.register(companiesPlugin, {
+    db,
+    drainAutoEvacuateEnabled: opts.drainAutoEvacuateEnabled,
+    drainCancelInFlightPlacementsEnabled: opts.drainCancelInFlightPlacementsEnabled,
+    workerIdentityAutomationEnabled: opts.workerIdentityAutomationEnabled ?? true,
+    apiPublicBaseUrl: opts.apiPublicBaseUrl,
+    workerProvisionManifestJson: opts.workerProvisionManifestJson,
+    workerProvisionManifestFile: opts.workerProvisionManifestFile,
+    workerProvisionManifestSigningKeyPem: opts.workerProvisionManifestSigningKeyPem,
+    bifrostAdmin:
+      opts.bifrostAdminBaseUrl?.trim() && opts.bifrostAdminToken?.trim()
+        ? { baseUrl: opts.bifrostAdminBaseUrl.trim(), token: opts.bifrostAdminToken.trim() }
+        : undefined,
+    internalHiveOperatorSecret: opts.internalHiveOperatorSecret,
+  });
+
+  // ── PR 6: Domain route plugins (simple + medium complexity) ──────────────
+  await fastify.register(workloadPlugin, { db });
+  await fastify.register(standupPlugin, { db });
+  await fastify.register(dashboardPlugin, { db });
+  await fastify.register(sidebarBadgesPlugin, { db });
+  await fastify.register(goalsPlugin, { db });
+  await fastify.register(activityPlugin, { db });
+  await fastify.register(pluginBoardPlugin, { db });
+  await fastify.register(webhookDeliveriesPlugin, { db });
+  await fastify.register(connectPlugin, { db, authPublicBaseUrl: opts.authPublicBaseUrl });
+  await fastify.register(instancePlugin, { db, deploymentMode: opts.deploymentMode });
+  await fastify.register(costsPlugin, { db });
+  await fastify.register(secretsPlugin, { db, defaultProvider: opts.secretsProvider });
+  await fastify.register(projectsPlugin, { db });
+  await fastify.register(departmentsPlugin, { db });
+  await fastify.register(approvalsPlugin, { db, strictSecretsMode: opts.secretsStrictMode });
+  await fastify.register(instanceStatusPlugin, {
+    db,
+    deploymentMode: opts.deploymentMode,
+    deploymentExposure: opts.deploymentExposure,
+    authReady: opts.authReady,
+    companyDeletionEnabled: opts.companyDeletionEnabled,
+    authDisableSignUp: opts.authDisableSignUp,
+    activeDatabaseConnectionString: opts.activeDatabaseConnectionString,
+    metricsEnabled: opts.metricsEnabled,
+    workload: (await import("./services/workload.js")).workloadService(db),
+  });
+
+  // ── middie (needed for Vite dev middleware) ──────────────────────────────
+  await fastify.register(fastifyMiddie);
+
+  // ── Static / Vite dev UI ──────────────────────────────────────────────────
   const CSP_NONCE_PLACEHOLDER = "__CSP_NONCE__";
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

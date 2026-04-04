@@ -1,12 +1,12 @@
 import os from "node:os";
 import path from "node:path";
-import express from "express";
-import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@hive/db";
+import type { Principal } from "@hive/shared";
 import { ISSUE_STATUS_TODO } from "@hive/shared";
 import { setRunLogBasePath } from "../services/run-log-store.js";
-import { agentRoutes } from "../routes/agents/index.js";
-import { errorHandler } from "../middleware/error-handler.js";
+import { createRouteTestFastify } from "./helpers/route-app.js";
+import { agentsPlugin } from "../routes/agents/index.js";
 
 const companyA = "550e8400-e29b-41d4-a716-446655440000";
 const agentA = "880e8400-e29b-41d4-a716-446655440003";
@@ -65,28 +65,11 @@ vi.mock("../services/index.js", async (importOriginal) => {
   };
 });
 
-function createApp(actor: {
-  type: "board" | "agent";
-  userId?: string;
-  agentId?: string;
-  companyId?: string;
-}) {
-  setRunLogBasePath(path.join(os.tmpdir(), "hive-work-items-test-run-logs"));
-  const app = express();
-  app.use((req, _res, next) => {
-    req.principal =
-      actor.type === "board"
-        ? { type: "system", id: actor.userId ?? "board", roles: [] }
-        : { type: "agent", id: actor.agentId ?? agentA, company_id: actor.companyId ?? companyA, roles: [] };
-    next();
-  });
-  app.use(agentRoutes({} as Parameters<typeof agentRoutes>[0], { strictSecretsMode: false }));
-  app.use(errorHandler);
-  return app;
-}
+const db = {} as unknown as Db;
 
-describe("GET /agents/:id/work-items", () => {
+describe("GET /api/agents/:id/work-items", () => {
   beforeEach(() => {
+    setRunLogBasePath(path.join(os.tmpdir(), "hive-work-items-test-run-logs"));
     getByIdMock.mockReset();
     listIssuesMock.mockReset();
   });
@@ -95,48 +78,68 @@ describe("GET /agents/:id/work-items", () => {
     getByIdMock.mockResolvedValue(mockAgentA);
     listIssuesMock.mockResolvedValue(mockTasks);
 
-    const app = createApp({ type: "board" });
-    const res = await request(app).get(`/agents/${agentA}/work-items`);
+    const boardPrincipal: Principal = { type: "system", id: "board", roles: [] };
+    const app = await createRouteTestFastify({
+      plugin: (f) => agentsPlugin(f, { db, strictSecretsMode: false }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/agents/${agentA}/work-items` });
 
-    expect(res.status).toBe(200);
-    expect(res.body.tasks).toHaveLength(1);
-    expect(res.body.tasks[0].id).toBe("issue-1");
-    expect(res.body.tasks[0].assigneeAgentId).toBe(agentA);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tasks).toHaveLength(1);
+    expect(res.json().tasks[0].id).toBe("issue-1");
+    expect(res.json().tasks[0].assigneeAgentId).toBe(agentA);
     expect(listIssuesMock).toHaveBeenCalledWith(companyA, {
       assigneeAgentId: agentA,
       status: "todo,in_progress",
     });
+    await app.close();
   });
 
   it("returns 200 when agent requests own work-items", async () => {
     getByIdMock.mockResolvedValue(mockAgentA);
     listIssuesMock.mockResolvedValue(mockTasks);
 
-    const app = createApp({ type: "agent", agentId: agentA, companyId: companyA });
-    const res = await request(app).get(`/agents/${agentA}/work-items`);
+    const agentPrincipal: Principal = { type: "agent", id: agentA, company_id: companyA, roles: [] };
+    const app = await createRouteTestFastify({
+      plugin: (f) => agentsPlugin(f, { db, strictSecretsMode: false }),
+      principal: agentPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/agents/${agentA}/work-items` });
 
-    expect(res.status).toBe(200);
-    expect(res.body.tasks).toHaveLength(1);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().tasks).toHaveLength(1);
+    await app.close();
   });
 
   it("returns 403 when agent requests another agent work-items", async () => {
     getByIdMock.mockResolvedValue(mockAgentB);
 
-    const app = createApp({ type: "agent", agentId: agentA, companyId: companyA });
-    const res = await request(app).get(`/agents/${agentB}/work-items`);
+    const agentPrincipal: Principal = { type: "agent", id: agentA, company_id: companyA, roles: [] };
+    const app = await createRouteTestFastify({
+      plugin: (f) => agentsPlugin(f, { db, strictSecretsMode: false }),
+      principal: agentPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/agents/${agentB}/work-items` });
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toContain("own work-items");
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toContain("own work-items");
     expect(listIssuesMock).not.toHaveBeenCalled();
+    await app.close();
   });
 
   it("returns 404 when agent does not exist", async () => {
     getByIdMock.mockResolvedValue(null);
 
-    const app = createApp({ type: "board" });
-    const res = await request(app).get(`/agents/${agentA}/work-items`);
+    const boardPrincipal: Principal = { type: "system", id: "board", roles: [] };
+    const app = await createRouteTestFastify({
+      plugin: (f) => agentsPlugin(f, { db, strictSecretsMode: false }),
+      principal: boardPrincipal,
+    });
+    const res = await app.inject({ method: "GET", url: `/api/agents/${agentA}/work-items` });
 
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe("Agent not found");
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("Agent not found");
+    await app.close();
   });
 });

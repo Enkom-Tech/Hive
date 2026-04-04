@@ -22,6 +22,11 @@ const FORBIDDEN = [
   { pattern: /\blistWorkerDeploymentOverview\b/, label: "renamed listWorkerDeploymentOverview" },
   { pattern: /\bWorkerDeploymentOverview\b/, label: "renamed WorkerDeploymentOverview" },
   { pattern: /\bworkerEnrollmentTokens\b/, label: "renamed workerEnrollmentTokens table export" },
+  // Express has been fully removed; no production source should import it.
+  { pattern: /from ["']express["']/, label: "Express import — Express has been removed; use Fastify" },
+  { pattern: /require\(["']express["']\)/, label: "Express require() — Express has been removed; use Fastify" },
+  { pattern: /from ["']multer["']/, label: "multer import — use @fastify/multipart instead" },
+  { pattern: /from ["']supertest["']/, label: "supertest import — use Fastify app.inject() instead" },
 ];
 
 function shouldSkipFile(relPath) {
@@ -78,11 +83,11 @@ function main() {
     for (const h of hits) {
       console.error(`  ${h.rel}: ${h.label}`);
     }
-    console.error("\nRemove or rename these references (tests asserting 404 are fine; they live under __tests__ or *.test.ts).");
+    console.error("\nRemove or replace these references (test files under __tests__/ or *.test.ts are excluded).");
     process.exit(1);
   }
 
-  console.log("ok  No legacy drone API identifiers in production source.");
+  console.log("ok  No forbidden legacy identifiers in production source.");
   process.exit(0);
 }
 

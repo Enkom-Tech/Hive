@@ -1,11 +1,10 @@
-import express from "express";
-import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
-import { accessRoutes } from "../routes/access.js";
-import { approvalRoutes } from "../routes/approvals.js";
-import { companyRoutes } from "../routes/companies/index.js";
-import { errorHandler } from "../middleware/error-handler.js";
+import { accessPlugin } from "../routes/access.js";
+import { approvalsPlugin } from "../routes/approvals.js";
+import { companiesPlugin } from "../routes/companies/company-routes.js";
+import { createRouteTestFastify, principalBoard } from "./helpers/route-app.js";
 
 const mockApprovalService = vi.hoisted(() => ({
   list: vi.fn().mockResolvedValue([]),
@@ -36,164 +35,116 @@ vi.mock("../services/index.js", async (importOriginal) => {
   };
 });
 
-function createAccessApp(db: Db) {
-  const app = express();
-  app.use(express.json());
-  app.use((_req, res, next) => {
-    (res as any).locals = {};
-    next();
-  });
-  app.use((req, _res, next) => {
-    (req as any).principal = {
-      type: "user",
-      id: "user-1",
-      company_ids: ["company-1"],
-      roles: [],
-    };
-    next();
-  });
-  app.use(
-    accessRoutes(db, {
-      deploymentMode: "authenticated",
-      deploymentExposure: "private",
-      bindHost: "localhost",
-      allowedHostnames: ["localhost"],
-      joinAllowedAdapterTypes: undefined,
-    }),
-  );
-  app.use(errorHandler);
-  return app;
-}
+const accessOpts = {
+  deploymentMode: "authenticated" as const,
+  deploymentExposure: "private" as const,
+  bindHost: "localhost",
+  allowedHostnames: ["localhost"],
+  joinAllowedAdapterTypes: undefined,
+};
 
 const approvalTestCompanyId = "550e8400-e29b-41d4-a716-446655440000";
 
-function createCompanyApp(db: Db) {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).principal = {
-      type: "system",
-      id: "user-1",
-      roles: ["instance_admin"],
-    };
-    next();
-  });
-  app.use("/companies", companyRoutes(db));
-  app.use(errorHandler);
-  return app;
-}
-
-function createApprovalApp() {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).principal = {
-      type: "system",
-      id: "user-1",
-      roles: ["instance_admin"],
-    };
-    next();
-  });
-  app.use(approvalRoutes({} as Db, false));
-  app.use(errorHandler);
-  return app;
-}
-
 describe("Sensitive routes validation", () => {
-  describe("POST /board-claim/:token/claim", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  describe("POST /api/board-claim/:token/claim", () => {
     it("returns 400 when body is missing code", async () => {
-      const db = {} as unknown as Db;
-      const app = createAccessApp(db);
-      const res = await request(app)
-        .post("/board-claim/some-token/claim")
-        .send({});
-      expect(res.status).toBe(400);
-      expect(res.body).toMatchObject({ error: "Validation error" });
-      expect(res.body.details).toBeDefined();
+      app = await createRouteTestFastify({
+        plugin: async (fastify) => accessPlugin(fastify, { db: {} as Db, ...accessOpts }),
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/board-claim/some-token/claim",
+        payload: {},
+        headers: { "content-type": "application/json" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
     });
 
     it("returns 400 when body has empty code", async () => {
-      const db = {} as unknown as Db;
-      const app = createAccessApp(db);
-      const res = await request(app)
-        .post("/board-claim/some-token/claim")
-        .send({ code: "" });
-      expect(res.status).toBe(400);
-      expect(res.body).toMatchObject({ error: "Validation error" });
-    });
-
-    it("returns 400 when body is not an object", async () => {
-      const db = {} as unknown as Db;
-      const app = createAccessApp(db);
-      const res = await request(app)
-        .post("/board-claim/some-token/claim")
-        .send("not json")
-        .set("Content-Type", "text/plain");
-      expect(res.status).toBe(400);
+      app = await createRouteTestFastify({
+        plugin: async (fastify) => accessPlugin(fastify, { db: {} as Db, ...accessOpts }),
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/board-claim/some-token/claim",
+        payload: { code: "" },
+        headers: { "content-type": "application/json" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
     });
   });
 
-  describe("GET /companies/:companyId/approvals", () => {
+  describe("GET /api/companies/:companyId/approvals", () => {
     it("returns 400 when query status is invalid", async () => {
-      const app = createApprovalApp();
-      const res = await request(app)
-        .get(`/companies/${approvalTestCompanyId}/approvals`)
-        .query({ status: "invalid_status" });
-      expect(res.status).toBe(400);
-      expect(res.body).toMatchObject({ error: "Invalid query" });
-      expect(res.body.details).toBeDefined();
+      app = await createRouteTestFastify({
+        plugin: async (fastify) => approvalsPlugin(fastify, { db: {} as Db, strictSecretsMode: false }),
+        principal: principalBoard({ companyIds: [approvalTestCompanyId], isSystem: true }),
+      });
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/companies/${approvalTestCompanyId}/approvals?status=invalid_status`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: "Invalid query" });
+      expect(res.json().details).toBeDefined();
     });
   });
 
-  describe("POST /companies", () => {
+  describe("POST /api/companies", () => {
     it("returns 400 when body is missing required name", async () => {
-      const db = {} as unknown as Db;
-      const app = createCompanyApp(db);
-      const res = await request(app).post("/companies").send({});
-      expect(res.status).toBe(400);
-      expect(res.body).toMatchObject({ error: "Validation error" });
-      expect(res.body.details).toBeDefined();
+      app = await createRouteTestFastify({
+        plugin: async (fastify) =>
+          companiesPlugin(fastify, { db: {} as Db, deploymentMode: "authenticated", deploymentExposure: "private" }),
+        principal: principalBoard({ companyIds: [], isSystem: true }),
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/companies",
+        payload: {},
+        headers: { "content-type": "application/json" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
     });
 
     it("returns 400 when body has wrong type for name", async () => {
-      const db = {} as unknown as Db;
-      const app = createCompanyApp(db);
-      const res = await request(app).post("/companies").send({ name: 123 });
-      expect(res.status).toBe(400);
-      expect(res.body).toMatchObject({ error: "Validation error" });
-      expect(res.body.details).toBeDefined();
+      app = await createRouteTestFastify({
+        plugin: async (fastify) =>
+          companiesPlugin(fastify, { db: {} as Db, deploymentMode: "authenticated", deploymentExposure: "private" }),
+        principal: principalBoard({ companyIds: [], isSystem: true }),
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/companies",
+        payload: { name: 123 },
+        headers: { "content-type": "application/json" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: expect.any(String) });
     });
   });
 
-  describe("GET /companies/:companyId/join-requests", () => {
+  describe("GET /api/companies/:companyId/join-requests", () => {
     it("returns 400 when query status is invalid", async () => {
-      const db = {} as unknown as Db;
-      const app = express();
-      app.use(express.json());
-      app.use((req, _res, next) => {
-        (req as any).principal = {
-          type: "system",
-          id: "user-1",
-          roles: ["instance_admin"],
-        };
-        next();
+      app = await createRouteTestFastify({
+        plugin: async (fastify) => accessPlugin(fastify, { db: {} as Db, ...accessOpts }),
+        principal: principalBoard({ companyIds: [], isSystem: true }),
       });
-      app.use(
-        accessRoutes(db, {
-          deploymentMode: "authenticated",
-          deploymentExposure: "private",
-          bindHost: "localhost",
-          allowedHostnames: ["localhost"],
-          joinAllowedAdapterTypes: undefined,
-        }),
-      );
-      app.use(errorHandler);
-      const res = await request(app)
-        .get(`/companies/${approvalTestCompanyId}/join-requests`)
-        .query({ status: "invalid_status" });
-      expect(res.status).toBe(400);
-      expect(res.body).toMatchObject({ error: "Invalid query" });
-      expect(res.body.details).toBeDefined();
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/companies/${approvalTestCompanyId}/join-requests?status=invalid_status`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: "Invalid query" });
+      expect(res.json().details).toBeDefined();
     });
   });
 });

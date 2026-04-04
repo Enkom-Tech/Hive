@@ -1,21 +1,26 @@
-import express from "express";
-import request from "supertest";
-import { describe, expect, it } from "vitest";
-import { registerBoardClaimRoutes } from "../board-claim-routes.js";
-import { errorHandler } from "../../../middleware/index.js";
+import { afterEach, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { registerBoardClaimRoutesF } from "../board-claim-routes.js";
+import { createRouteTestFastify } from "../../../__tests__/helpers/route-app.js";
 
-describe("registerBoardClaimRoutes", () => {
+describe("registerBoardClaimRoutesF", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
   it("returns 400 for invalid board-claim query", async () => {
-    const app = express();
-    const router = express.Router();
     const db = {} as import("@hive/db").Db;
-    registerBoardClaimRoutes(router, db);
-    app.use(router);
-    app.use(errorHandler);
-    const res = await request(app)
-      .get("/board-claim/x")
-      .query({ code: ["not", "a", "string"] as unknown as string });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Invalid query");
+    app = await createRouteTestFastify({
+      plugin: async (fastify) => registerBoardClaimRoutesF(fastify, db),
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/board-claim/x?code=not&code=a&code=string",
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toBe("Invalid query");
   });
 });

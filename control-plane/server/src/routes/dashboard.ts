@@ -1,18 +1,18 @@
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { dashboardService } from "../services/dashboard.js";
 import { assertCompanyRead } from "./authz.js";
 
-export function dashboardRoutes(db: Db) {
-  const router = Router();
+export async function dashboardPlugin(fastify: FastifyInstance, opts: { db: Db }): Promise<void> {
+  const { db } = opts;
   const svc = dashboardService(db);
 
-  router.get("/companies/:companyId/dashboard", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    await assertCompanyRead(db, req, companyId);
-    const summary = await svc.summary(companyId);
-    res.json(summary);
-  });
-
-  return router;
+  fastify.get<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/dashboard",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCompanyRead(db, req, companyId);
+      return reply.send(await svc.summary(companyId));
+    },
+  );
 }

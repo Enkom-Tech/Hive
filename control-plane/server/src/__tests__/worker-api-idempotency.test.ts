@@ -1,18 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { Request } from "express";
 import { parseWorkerApiIdempotencyKey } from "../routes/worker-api-idempotency.js";
 import { HttpError } from "../errors.js";
+import type { HeaderCarrier } from "../routes/authz.js";
 
-function mockReq(headers: Record<string, string | undefined>): Request {
-  return {
-    get(name: string) {
-      const want = name.toLowerCase();
-      for (const [k, v] of Object.entries(headers)) {
-        if (k.toLowerCase() === want) return v;
-      }
-      return undefined;
-    },
-  } as unknown as Request;
+function mockReq(headers: Record<string, string | undefined>): HeaderCarrier {
+  const lowercased: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    lowercased[k.toLowerCase()] = v;
+  }
+  return { headers: lowercased as Record<string, string | string[] | undefined> };
 }
 
 describe("parseWorkerApiIdempotencyKey", () => {

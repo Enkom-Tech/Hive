@@ -1,10 +1,11 @@
-import type { Request } from "express";
 import type { Db } from "@hive/db";
 import { optionalCompanyIdQuerySchema, isUuidLike } from "@hive/shared";
 import { badRequest, conflict, forbidden, notFound, unprocessable } from "../../errors.js";
-import { getCurrentPrincipal } from "../../auth/principal.js";
-import { assertCompanyRead } from "../authz.js";
+import { assertCompanyRead, type PrincipalCarrier } from "../authz.js";
 import type { accessService, agentService } from "../../services/index.js";
+
+/** Minimal interface for an HTTP request usable in agent route helpers. */
+export type AgentReq = PrincipalCarrier & { query: unknown };
 
 export type AgentRoutesCommonDeps = {
   db: Db;
@@ -21,12 +22,12 @@ export function canCreateAgents(agent: {
 }
 
 export async function assertCanCreateAgentsForCompany(
-  req: Request,
+  req: AgentReq,
   companyId: string,
   deps: AgentRoutesCommonDeps,
 ): Promise<{ id: string; companyId: string } | null> {
   await assertCompanyRead(deps.db, req, companyId);
-  const p = getCurrentPrincipal(req);
+  const p = req.principal ?? null;
   const isBoard = p?.type === "user" || p?.type === "system";
   if (isBoard) {
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) return null;
@@ -54,7 +55,7 @@ export async function assertCanCreateAgentsForCompany(
 }
 
 export async function assertCanReadConfigurations(
-  req: Request,
+  req: AgentReq,
   companyId: string,
   deps: AgentRoutesCommonDeps,
 ): Promise<{ id: string; companyId: string } | null> {
@@ -62,12 +63,12 @@ export async function assertCanReadConfigurations(
 }
 
 export async function actorCanReadConfigurationsForCompany(
-  req: Request,
+  req: AgentReq,
   companyId: string,
   deps: AgentRoutesCommonDeps,
 ): Promise<boolean> {
   await assertCompanyRead(deps.db, req, companyId);
-  const p = getCurrentPrincipal(req);
+  const p = req.principal ?? null;
   const isBoard = p?.type === "user" || p?.type === "system";
   if (isBoard) {
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) return true;
@@ -86,12 +87,12 @@ export async function actorCanReadConfigurationsForCompany(
 }
 
 export async function assertCanUpdateAgent(
-  req: Request,
+  req: AgentReq,
   targetAgent: { id: string; companyId: string },
   deps: AgentRoutesCommonDeps,
 ): Promise<void> {
   await assertCompanyRead(deps.db, req, targetAgent.companyId);
-  const p = getCurrentPrincipal(req);
+  const p = req.principal ?? null;
   const isBoard = p?.type === "user" || p?.type === "system";
   if (isBoard) {
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) return;
@@ -118,7 +119,7 @@ export async function assertCanUpdateAgent(
   throw forbidden("Only CEO or agent creators can modify other agents");
 }
 
-export async function resolveCompanyIdForAgentReference(req: Request, db: Db): Promise<string | null> {
+export async function resolveCompanyIdForAgentReference(req: AgentReq, db: Db): Promise<string | null> {
   const parsed = optionalCompanyIdQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     throw badRequest("Invalid query", parsed.error.issues);
@@ -128,7 +129,7 @@ export async function resolveCompanyIdForAgentReference(req: Request, db: Db): P
     await assertCompanyRead(db, req, requestedCompanyId);
     return requestedCompanyId;
   }
-  const p = getCurrentPrincipal(req);
+  const p = req.principal ?? null;
   if (p?.type === "agent" && p.company_id) {
     return p.company_id;
   }
@@ -136,7 +137,7 @@ export async function resolveCompanyIdForAgentReference(req: Request, db: Db): P
 }
 
 export async function normalizeAgentReference(
-  req: Request,
+  req: AgentReq,
   rawId: string,
   deps: AgentRoutesCommonDeps,
 ): Promise<string> {

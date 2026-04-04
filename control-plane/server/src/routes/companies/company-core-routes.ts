@@ -1,4 +1,4 @@
-import type { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import {
   companyPortabilityExportSchema,
   companyPortabilityImportSchema,
@@ -6,92 +6,86 @@ import {
   createCompanySchema,
   updateCompanySchema,
 } from "@hive/shared";
-import { getCurrentPrincipal } from "../../auth/principal.js";
-import { validate } from "../../middleware/validate.js";
 import { logActivity } from "../../services/index.js";
 import { assertBoard, assertCompanyPermission, assertCompanyRead, assertInstanceAdmin, getActorInfo } from "../authz.js";
 import { parseWorkerProvisionManifest } from "../../services/worker-provision-manifest.js";
 import type { CompanyRoutesDeps } from "./company-routes-context.js";
 
-export function registerCompanyCoreListStatsRoutes(router: Router, deps: CompanyRoutesDeps) {
+export function registerCompanyCoreListStatsRoutesF(fastify: FastifyInstance, deps: CompanyRoutesDeps) {
   const { db, svc } = deps;
 
-  router.get("/", async (req, res) => {
+  fastify.get("/api/companies", async (req, reply) => {
     assertBoard(req);
-    const p = getCurrentPrincipal(req);
+    const p = req.principal ?? null;
     const result = await svc.list();
     if (p?.type === "system" || p?.roles?.includes("instance_admin")) {
-      res.json(result);
-      return;
+      return reply.send(result);
     }
     const allowed = new Set(p?.company_ids ?? []);
-    res.json(result.filter((company) => allowed.has(company.id)));
+    return reply.send(result.filter((company) => allowed.has(company.id)));
   });
 
-  router.get("/stats", async (req, res) => {
+  fastify.get("/api/companies/stats", async (req, reply) => {
     assertBoard(req);
-    const p = getCurrentPrincipal(req);
+    const p = req.principal ?? null;
     const allowed =
       p?.type === "system" || p?.roles?.includes("instance_admin")
         ? null
         : new Set(p?.company_ids ?? []);
     const stats = await svc.stats();
-    if (!allowed) {
-      res.json(stats);
-      return;
-    }
+    if (!allowed) return reply.send(stats);
     const filtered = Object.fromEntries(Object.entries(stats).filter(([companyId]) => allowed!.has(companyId)));
-    res.json(filtered);
+    return reply.send(filtered);
   });
 }
 
-export function registerCompanyCoreDetailPortabilityCrudRoutes(router: Router, deps: CompanyRoutesDeps) {
+export function registerCompanyCoreDetailPortabilityCrudRoutesF(fastify: FastifyInstance, deps: CompanyRoutesDeps) {
   const { db, svc, portability, access } = deps;
 
-  // Common malformed path when companyId is empty in "/api/companies/{companyId}/issues".
-  router.get("/issues", (_req, res) => {
-    res.status(400).json({
-      error: "Missing companyId in path. Use /api/companies/{companyId}/issues.",
-    });
+  fastify.get("/api/companies/issues", async (_req, reply) => {
+    return reply.status(400).send({ error: "Missing companyId in path. Use /api/companies/{companyId}/issues." });
   });
 
-  router.get("/:companyId", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyRead(db, req, companyId);
     const company = await svc.getById(companyId);
-    if (!company) {
-      res.status(404).json({ error: "Company not found" });
-      return;
-    }
-    res.json(company);
+    if (!company) return reply.status(404).send({ error: "Company not found" });
+    return reply.send(company);
   });
 
-  router.post("/:companyId/export", validate(companyPortabilityExportSchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.post<{ Params: { companyId: string } }>("/api/companies/:companyId/export", async (req, reply) => {
+    const { companyId } = req.params;
+    const parsed = companyPortabilityExportSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     await assertCompanyPermission(db, req, companyId, "company:settings");
-    const result = await portability.exportBundle(companyId, req.body);
-    res.json(result);
+    const result = await portability.exportBundle(companyId, parsed.data);
+    return reply.send(result);
   });
 
-  router.post("/import/preview", validate(companyPortabilityPreviewSchema), async (req, res) => {
-    if (req.body.target.mode === "existing_company") {
-      await assertCompanyRead(db, req, req.body.target.companyId);
+  fastify.post("/api/companies/import/preview", async (req, reply) => {
+    const parsed = companyPortabilityPreviewSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    if (parsed.data.target.mode === "existing_company") {
+      await assertCompanyRead(db, req, parsed.data.target.companyId);
     } else {
       assertInstanceAdmin(req);
     }
-    const preview = await portability.previewImport(req.body);
-    res.json(preview);
+    const preview = await portability.previewImport(parsed.data);
+    return reply.send(preview);
   });
 
-  router.post("/import", validate(companyPortabilityImportSchema), async (req, res) => {
-    if (req.body.target.mode === "existing_company") {
-      await assertCompanyPermission(db, req, req.body.target.companyId, "company:settings");
+  fastify.post("/api/companies/import", async (req, reply) => {
+    const parsed = companyPortabilityImportSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    if (parsed.data.target.mode === "existing_company") {
+      await assertCompanyPermission(db, req, parsed.data.target.companyId, "company:settings");
     } else {
       assertInstanceAdmin(req);
     }
     const actor = getActorInfo(req);
-    const pImport = getCurrentPrincipal(req);
-    const result = await portability.importBundle(req.body, pImport?.type === "user" ? pImport.id : null);
+    const p = req.principal ?? null;
+    const result = await portability.importBundle(parsed.data, p?.type === "user" ? p.id : null);
     await logActivity(db, {
       companyId: result.company.id,
       actorType: actor.actorType,
@@ -102,19 +96,21 @@ export function registerCompanyCoreDetailPortabilityCrudRoutes(router: Router, d
       agentId: actor.agentId,
       runId: actor.runId,
       details: {
-        include: req.body.include ?? null,
+        include: parsed.data.include ?? null,
         agentCount: result.agents.length,
         warningCount: result.warnings.length,
         companyAction: result.company.action,
       },
     });
-    res.json(result);
+    return reply.send(result);
   });
 
-  router.post("/", validate(createCompanySchema), async (req, res) => {
+  fastify.post("/api/companies", async (req, reply) => {
     assertInstanceAdmin(req);
-    const p = getCurrentPrincipal(req);
-    const company = await svc.create(req.body);
+    const parsed = createCompanySchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    const p = req.principal ?? null;
+    const company = await svc.create(parsed.data as Parameters<typeof svc.create>[0]);
     await access.ensureMembership(company.id, "user", p?.id ?? "local-board", "admin", "active");
     await logActivity(db, {
       companyId: company.id,
@@ -125,28 +121,27 @@ export function registerCompanyCoreDetailPortabilityCrudRoutes(router: Router, d
       entityId: company.id,
       details: { name: company.name },
     });
-    res.status(201).json(company);
+    return reply.status(201).send(company);
   });
 
-  router.patch("/:companyId", validate(updateCompanySchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.patch<{ Params: { companyId: string } }>("/api/companies/:companyId", async (req, reply) => {
+    const { companyId } = req.params;
+    const parsed = updateCompanySchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     await assertCompanyPermission(db, req, companyId, "company:settings");
-    const wrm = (req.body as { workerRuntimeManifestJson?: string | null }).workerRuntimeManifestJson;
+    const body = parsed.data as { workerRuntimeManifestJson?: string | null };
+    const wrm = body.workerRuntimeManifestJson;
     if (wrm != null && wrm !== "") {
       try {
         parseWorkerProvisionManifest(wrm);
       } catch (err) {
-        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-        return;
+        return reply.status(400).send({ error: err instanceof Error ? err.message : String(err) });
       }
     }
-    const company = await svc.update(companyId, req.body);
-    if (!company) {
-      res.status(404).json({ error: "Company not found" });
-      return;
-    }
-    const pUpdate = getCurrentPrincipal(req);
-    const activityDetails = { ...req.body } as Record<string, unknown>;
+    const company = await svc.update(companyId, parsed.data);
+    if (!company) return reply.status(404).send({ error: "Company not found" });
+    const p = req.principal ?? null;
+    const activityDetails = { ...parsed.data } as Record<string, unknown>;
     if (Object.prototype.hasOwnProperty.call(activityDetails, "workerRuntimeManifestJson")) {
       activityDetails.workerRuntimeManifestJson =
         activityDetails.workerRuntimeManifestJson != null ? "[redacted]" : null;
@@ -154,43 +149,37 @@ export function registerCompanyCoreDetailPortabilityCrudRoutes(router: Router, d
     await logActivity(db, {
       companyId,
       actorType: "user",
-      actorId: pUpdate?.id ?? "board",
+      actorId: p?.id ?? "board",
       action: "company.updated",
       entityType: "company",
       entityId: companyId,
       details: activityDetails,
     });
-    res.json(company);
+    return reply.send(company);
   });
 
-  router.post("/:companyId/archive", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.post<{ Params: { companyId: string } }>("/api/companies/:companyId/archive", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyPermission(db, req, companyId, "company:settings");
     const company = await svc.archive(companyId);
-    if (!company) {
-      res.status(404).json({ error: "Company not found" });
-      return;
-    }
-    const pArchive = getCurrentPrincipal(req);
+    if (!company) return reply.status(404).send({ error: "Company not found" });
+    const p = req.principal ?? null;
     await logActivity(db, {
       companyId,
       actorType: "user",
-      actorId: pArchive?.id ?? "board",
+      actorId: p?.id ?? "board",
       action: "company.archived",
       entityType: "company",
       entityId: companyId,
     });
-    res.json(company);
+    return reply.send(company);
   });
 
-  router.delete("/:companyId", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.delete<{ Params: { companyId: string } }>("/api/companies/:companyId", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyPermission(db, req, companyId, "company:settings");
     const company = await svc.remove(companyId);
-    if (!company) {
-      res.status(404).json({ error: "Company not found" });
-      return;
-    }
-    res.json({ ok: true });
+    if (!company) return reply.status(404).send({ error: "Company not found" });
+    return reply.send({ ok: true });
   });
 }

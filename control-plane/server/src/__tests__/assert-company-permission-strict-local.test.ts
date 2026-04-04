@@ -1,4 +1,3 @@
-import type { Request } from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@hive/db";
 import { assertCompanyPermission } from "../routes/authz.js";
@@ -28,7 +27,7 @@ describe("assertCompanyPermission with HIVE_RBAC_ENFORCE_FOR_LOCAL_BOARD", () =>
         company_ids: ["c1"],
         roles: [] as string[],
       },
-    } as unknown as Request;
+    } as unknown as import("fastify").FastifyRequest;
 
     await expect(assertCompanyPermission(db, req, "c1", "company:read")).rejects.toMatchObject({
       status: 403,

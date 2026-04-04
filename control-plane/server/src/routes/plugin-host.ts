@@ -1,7 +1,6 @@
-import { Router, type NextFunction, type Request, type Response } from "express";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Db } from "@hive/db";
-import { validate } from "../middleware/validate.js";
 import { unauthorized } from "../errors.js";
 import { pluginRegistryService } from "../services/plugins.js";
 
@@ -10,50 +9,40 @@ const rpcBodySchema = z.object({
   method: z.literal("ping"),
 });
 
-/**
- * Internal Bearer-authenticated RPC surface for out-of-process plugins.
- * Set `HIVE_PLUGIN_HOST_SECRET` and call `POST /api/internal/plugin-host/rpc`.
- */
-export function pluginHostRoutes(
-  db: Db,
-  opts: { hostSecret: string },
-): Router {
-  const router = Router();
-  const svc = pluginRegistryService(db);
+export async function pluginHostPlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; hostSecret: string },
+): Promise<void> {
+  const svc = pluginRegistryService(opts.db);
+  const secret = opts.hostSecret;
 
-  function requireHostSecret(req: Request, _res: Response, next: NextFunction): void {
-    const h = req.headers.authorization;
+  function requireHostSecret(authHeader: string | undefined): void {
     const tok =
-      typeof h === "string" && h.toLowerCase().startsWith("bearer ") ? h.slice(7).trim() : "";
-    if (!tok || tok !== opts.hostSecret) {
-      next(unauthorized("Invalid plugin host token"));
-      return;
+      typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")
+        ? authHeader.slice(7).trim()
+        : "";
+    if (!tok || tok !== secret) {
+      throw unauthorized("Invalid plugin host token");
     }
-    next();
   }
 
-  router.post("/rpc", requireHostSecret, validate(rpcBodySchema), async (req, res, next) => {
-    try {
-      const { instanceId, method } = req.body as z.infer<typeof rpcBodySchema>;
+  fastify.post<{ Body: z.infer<typeof rpcBodySchema> }>(
+    "/api/internal/plugin-host/rpc",
+    async (req, reply) => {
+      requireHostSecret(req.headers.authorization as string | undefined);
+      const { instanceId, method } = rpcBodySchema.parse(req.body);
       const row = await svc.getInstanceForRpc(instanceId);
       if (!row || !row.enabled) {
-        res.status(404).json({ ok: false, error: "Plugin instance not found or disabled" });
-        return;
+        return reply.status(404).send({ ok: false, error: "Plugin instance not found or disabled" });
       }
       const caps = svc.parseCapabilitiesJson(row.capabilitiesJson);
       if (!caps.includes("rpc.ping")) {
-        res.status(403).json({ ok: false, error: "Missing rpc.ping capability" });
-        return;
+        return reply.status(403).send({ ok: false, error: "Missing rpc.ping capability" });
       }
       if (method === "ping") {
-        res.json({ ok: true, method: "ping" });
-        return;
+        return reply.send({ ok: true, method: "ping" });
       }
-      res.status(400).json({ ok: false, error: "Unsupported method" });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  return router;
+      return reply.status(400).send({ ok: false, error: "Unsupported method" });
+    },
+  );
 }

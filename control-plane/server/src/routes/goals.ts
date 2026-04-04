@@ -1,64 +1,60 @@
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { createGoalSchema, updateGoalSchema } from "@hive/shared";
-import { validate } from "../middleware/validate.js";
 import { goalService, logActivity } from "../services/index.js";
 import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "./authz.js";
 
-export function goalRoutes(db: Db) {
-  const router = Router();
+export async function goalsPlugin(fastify: FastifyInstance, opts: { db: Db }): Promise<void> {
+  const { db } = opts;
   const svc = goalService(db);
 
-  router.get("/companies/:companyId/goals", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    await assertCompanyRead(db, req, companyId);
-    const result = await svc.list(companyId);
-    res.json(result);
-  });
+  fastify.get<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/goals",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCompanyRead(db, req, companyId);
+      return reply.send(await svc.list(companyId));
+    },
+  );
 
-  router.get("/goals/:id", async (req, res) => {
-    const id = req.params.id as string;
-    const goal = await svc.getById(id);
-    if (!goal) {
-      res.status(404).json({ error: "Goal not found" });
-      return;
-    }
+  fastify.get<{ Params: { id: string } }>("/api/goals/:id", async (req, reply) => {
+    const goal = await svc.getById(req.params.id);
+    if (!goal) return reply.status(404).send({ error: "Goal not found" });
     await assertCompanyRead(db, req, goal.companyId);
-    res.json(goal);
+    return reply.send(goal);
   });
 
-  router.post("/companies/:companyId/goals", validate(createGoalSchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
-    await assertCompanyPermission(db, req, companyId, "goals:write");
-    const goal = await svc.create(companyId, req.body);
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      action: "goal.created",
-      entityType: "goal",
-      entityId: goal.id,
-      details: { title: goal.title },
-    });
-    res.status(201).json(goal);
-  });
+  fastify.post<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/goals",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCompanyPermission(db, req, companyId, "goals:write");
+      const parsed = createGoalSchema.safeParse(req.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+      const goal = await svc.create(companyId, parsed.data);
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        action: "goal.created",
+        entityType: "goal",
+        entityId: goal.id,
+        details: { title: goal.title },
+      });
+      return reply.status(201).send(goal);
+    },
+  );
 
-  router.patch("/goals/:id", validate(updateGoalSchema), async (req, res) => {
-    const id = req.params.id as string;
-    const existing = await svc.getById(id);
-    if (!existing) {
-      res.status(404).json({ error: "Goal not found" });
-      return;
-    }
+  fastify.patch<{ Params: { id: string } }>("/api/goals/:id", async (req, reply) => {
+    const existing = await svc.getById(req.params.id);
+    if (!existing) return reply.status(404).send({ error: "Goal not found" });
     await assertCompanyPermission(db, req, existing.companyId, "goals:write");
-    const goal = await svc.update(id, req.body);
-    if (!goal) {
-      res.status(404).json({ error: "Goal not found" });
-      return;
-    }
-
+    const parsed = updateGoalSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+    const goal = await svc.update(req.params.id, parsed.data);
+    if (!goal) return reply.status(404).send({ error: "Goal not found" });
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: goal.companyId,
@@ -68,26 +64,17 @@ export function goalRoutes(db: Db) {
       action: "goal.updated",
       entityType: "goal",
       entityId: goal.id,
-      details: req.body,
+      details: parsed.data,
     });
-
-    res.json(goal);
+    return reply.send(goal);
   });
 
-  router.delete("/goals/:id", async (req, res) => {
-    const id = req.params.id as string;
-    const existing = await svc.getById(id);
-    if (!existing) {
-      res.status(404).json({ error: "Goal not found" });
-      return;
-    }
+  fastify.delete<{ Params: { id: string } }>("/api/goals/:id", async (req, reply) => {
+    const existing = await svc.getById(req.params.id);
+    if (!existing) return reply.status(404).send({ error: "Goal not found" });
     await assertCompanyPermission(db, req, existing.companyId, "goals:write");
-    const goal = await svc.remove(id);
-    if (!goal) {
-      res.status(404).json({ error: "Goal not found" });
-      return;
-    }
-
+    const goal = await svc.remove(req.params.id);
+    if (!goal) return reply.status(404).send({ error: "Goal not found" });
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: goal.companyId,
@@ -98,9 +85,6 @@ export function goalRoutes(db: Db) {
       entityType: "goal",
       entityId: goal.id,
     });
-
-    res.json(goal);
+    return reply.send(goal);
   });
-
-  return router;
 }

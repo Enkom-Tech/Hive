@@ -1,10 +1,9 @@
-import type { Request } from "express";
 import { eq } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { authUsers, invites, joinRequests } from "@hive/db";
 import { PERMISSION_KEYS } from "@hive/shared";
-import { getCurrentPrincipal, isLocalImplicit } from "../../../auth/principal.js";
 import { redactEventPayload } from "../../../redaction.js";
+import type { PrincipalCarrier, HeaderCarrier } from "../../authz.js";
 
 export function toJoinRequestResponse(row: typeof joinRequests.$inferSelect) {
   const { claimSecretHash: _claimSecretHash, ...safe } = row;
@@ -70,25 +69,28 @@ export function resolveJoinRequestAgentManagerId(
   return (rootCeo ?? ceoCandidates[0] ?? null)?.id ?? null;
 }
 
-export function requestIp(req: Request) {
-  const forwarded = req.header("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
+export function requestIpF(req: HeaderCarrier): string {
+  const headers = req.headers as Record<string, string | string[] | undefined>;
+  const forwarded = headers["x-forwarded-for"];
+  const forwardedStr = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  if (forwardedStr) {
+    const first = forwardedStr.split(",")[0]?.trim();
     if (first) return first;
   }
-  return req.ip || "unknown";
+  return "unknown";
 }
 
 export function inviteExpired(invite: typeof invites.$inferSelect) {
   return invite.expiresAt.getTime() <= Date.now();
 }
 
-export async function resolveActorEmail(
+export async function resolveActorEmailF(
   db: Db,
-  req: Request,
+  req: PrincipalCarrier,
 ): Promise<string | null> {
-  if (isLocalImplicit(req)) return "local@hive.local";
-  const p = getCurrentPrincipal(req);
+  const p = req.principal ?? null;
+  if (p?.type === "system") return "local@hive.local";
+  if (p?.type === "user" && p.id === "local-board") return "local@hive.local";
   const userId = p?.type === "user" ? p.id : null;
   if (!userId) return null;
   const user = await db
@@ -97,6 +99,12 @@ export async function resolveActorEmail(
     .where(eq(authUsers.id, userId))
     .then((rows) => rows[0] ?? null);
   return user?.email ?? null;
+}
+
+export function isLocalImplicitF(req: PrincipalCarrier): boolean {
+  const p = req.principal ?? null;
+  if (p?.type === "system") return true;
+  return p?.type === "user" && p.id === "local-board";
 }
 
 function isAbortError(error: unknown) {

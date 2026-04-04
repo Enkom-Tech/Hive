@@ -1,10 +1,8 @@
-import { Router } from "express";
 import { z } from "zod";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { listActivityQuerySchema } from "@hive/shared";
-import { validate } from "../middleware/validate.js";
 import { activityService } from "../services/activity.js";
-import { getCurrentPrincipal } from "../auth/principal.js";
 import { assertCompanyPermission, assertCompanyRead } from "./authz.js";
 import { issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
@@ -19,82 +17,61 @@ const createActivitySchema = z.object({
   details: z.record(z.string(), z.unknown()).optional().nullable(),
 });
 
-export function activityRoutes(db: Db) {
-  const router = Router();
+export async function activityPlugin(fastify: FastifyInstance, opts: { db: Db }): Promise<void> {
+  const { db } = opts;
   const svc = activityService(db);
   const issueSvc = issueService(db);
 
   async function resolveIssueByRef(rawId: string) {
-    if (/^[A-Z]+-\d+$/i.test(rawId)) {
-      return issueSvc.getByIdentifier(rawId);
-    }
+    if (/^[A-Z]+-\d+$/i.test(rawId)) return issueSvc.getByIdentifier(rawId);
     return issueSvc.getById(rawId);
   }
 
-  router.get("/companies/:companyId/activity", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    await assertCompanyRead(db, req, companyId);
+  fastify.get<{ Params: { companyId: string }; Querystring: Record<string, unknown> }>(
+    "/api/companies/:companyId/activity",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCompanyRead(db, req, companyId);
+      const parsed = listActivityQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid query", details: parsed.error.issues });
+      let agentId = parsed.data.agentId;
+      const p = req.principal;
+      if (p?.type === "agent") agentId = p.id ?? undefined;
+      return reply.send(await svc.list({ companyId, agentId, entityType: parsed.data.entityType, entityId: parsed.data.entityId }));
+    },
+  );
 
-    const parsed = listActivityQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
-      return;
-    }
-    let agentId = parsed.data.agentId;
-    const p = getCurrentPrincipal(req);
-    if (p?.type === "agent") {
-      agentId = p.id ?? undefined;
-    }
-    const filters = {
-      companyId,
-      agentId,
-      entityType: parsed.data.entityType,
-      entityId: parsed.data.entityId,
-    };
-    const result = await svc.list(filters);
-    res.json(result);
-  });
+  fastify.post<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/activity",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCompanyPermission(db, req, companyId, "activity:write");
+      const parsed = createActivitySchema.safeParse(req.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+      const event = await svc.create({
+        companyId,
+        ...parsed.data,
+        details: parsed.data.details ? sanitizeRecord(parsed.data.details) : null,
+      });
+      return reply.status(201).send(event);
+    },
+  );
 
-  router.post("/companies/:companyId/activity", validate(createActivitySchema), async (req, res) => {
-    const companyId = req.params.companyId as string;
-    await assertCompanyPermission(db, req, companyId, "activity:write");
-    const event = await svc.create({
-      companyId,
-      ...req.body,
-      details: req.body.details ? sanitizeRecord(req.body.details) : null,
-    });
-    res.status(201).json(event);
-  });
-
-  router.get("/issues/:id/activity", async (req, res) => {
-    const rawId = req.params.id as string;
-    const issue = await resolveIssueByRef(rawId);
-    if (!issue) {
-      res.status(404).json({ error: "Issue not found" });
-      return;
-    }
+  fastify.get<{ Params: { id: string } }>("/api/issues/:id/activity", async (req, reply) => {
+    const issue = await resolveIssueByRef(req.params.id);
+    if (!issue) return reply.status(404).send({ error: "Issue not found" });
     await assertCompanyRead(db, req, issue.companyId);
-    const result = await svc.forIssue(issue.id);
-    res.json(result);
+    return reply.send(await svc.forIssue(issue.id));
   });
 
-  router.get("/issues/:id/runs", async (req, res) => {
-    const rawId = req.params.id as string;
-    const issue = await resolveIssueByRef(rawId);
-    if (!issue) {
-      res.status(404).json({ error: "Issue not found" });
-      return;
-    }
+  fastify.get<{ Params: { id: string } }>("/api/issues/:id/runs", async (req, reply) => {
+    const issue = await resolveIssueByRef(req.params.id);
+    if (!issue) return reply.status(404).send({ error: "Issue not found" });
     await assertCompanyRead(db, req, issue.companyId);
-    const result = await svc.runsForIssue(issue.companyId, issue.id);
-    res.json(result);
+    return reply.send(await svc.runsForIssue(issue.companyId, issue.id));
   });
 
-  router.get("/heartbeat-runs/:runId/issues", async (req, res) => {
-    const runId = req.params.runId as string;
-    const result = await svc.issuesForRun(runId);
-    res.json(result);
+  fastify.get<{ Params: { runId: string } }>("/api/heartbeat-runs/:runId/issues", async (req, reply) => {
+    return reply.send(await svc.issuesForRun(req.params.runId));
   });
-
-  return router;
 }

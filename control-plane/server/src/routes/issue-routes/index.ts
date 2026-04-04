@@ -1,26 +1,21 @@
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import type { StorageService } from "../../storage/types.js";
 import { createIssueRoutesContext } from "./context.js";
-import { registerIssueRouteParams } from "./issue-route-params.js";
-import { registerIssueCrudRoutes } from "./issue-crud-routes.js";
-import { registerIssueLabelsRoutes } from "./issue-labels-routes.js";
-import { registerIssueApprovalsRoutes } from "./issue-approvals-routes.js";
-import { registerIssueCheckoutRoutes } from "./issue-checkout-routes.js";
-import { registerIssueCommentsRoutes } from "./issue-comments-routes.js";
-import { registerIssueAttachmentsRoutes } from "./issue-attachments-routes.js";
+import { registerIssueCrudRoutesF } from "./issue-crud-routes.js";
+import { registerIssueLabelsRoutesF } from "./issue-labels-routes.js";
+import { registerIssueApprovalsRoutesF } from "./issue-approvals-routes.js";
+import { registerIssueCheckoutRoutesF } from "./issue-checkout-routes.js";
+import { registerIssueCommentsRoutesF } from "./issue-comments-routes.js";
 
-export function issueRoutes(db: Db, storage: StorageService) {
-  const router = Router();
-  const ctx = createIssueRoutesContext(db, storage);
-
-  registerIssueRouteParams(router, ctx);
-  registerIssueCrudRoutes(router, ctx);
-  registerIssueLabelsRoutes(router, ctx);
-  registerIssueApprovalsRoutes(router, ctx);
-  registerIssueCheckoutRoutes(router, ctx);
-  registerIssueCommentsRoutes(router, ctx);
-  registerIssueAttachmentsRoutes(router, ctx);
-
-  return router;
+export async function issuesPlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; storage: StorageService },
+): Promise<void> {
+  const ctx = createIssueRoutesContext(opts.db, opts.storage);
+  registerIssueCrudRoutesF(fastify, ctx);
+  registerIssueLabelsRoutesF(fastify, ctx);
+  registerIssueApprovalsRoutesF(fastify, ctx);
+  registerIssueCheckoutRoutesF(fastify, ctx);
+  registerIssueCommentsRoutesF(fastify, ctx);
 }

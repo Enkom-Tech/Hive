@@ -1,15 +1,25 @@
-import { describe, it, expect } from "vitest";
-import express from "express";
-import request from "supertest";
-import { healthRoutes } from "../routes/health.js";
+import { describe, it, expect, afterAll } from "vitest";
+import Fastify from "fastify";
+import { healthPlugin } from "../routes/health.js";
 
 describe("GET /health", () => {
-  const app = express();
-  app.use("/health", healthRoutes());
+  const app = Fastify({ logger: false });
+  app.register(healthPlugin, {
+    deploymentMode: "local_trusted",
+    deploymentExposure: "private",
+    authReady: true,
+    companyDeletionEnabled: true,
+    authDisableSignUp: false,
+  });
 
-  it("returns 200 with status ok", async () => {
-    const res = await request(app).get("/health");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "ok" });
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("returns 200 with status ok (no db)", async () => {
+    await app.ready();
+    const res = await app.inject({ method: "GET", url: "/health" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: "ok" });
   });
 });

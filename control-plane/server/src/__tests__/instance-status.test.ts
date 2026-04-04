@@ -1,9 +1,9 @@
-import express from "express";
-import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
 import * as hiveDb from "@hive/db";
-import { errorHandler } from "../middleware/error-handler.js";
-import { instanceStatusRoutes } from "../routes/instance-status.js";
+import { createRouteTestFastify } from "./helpers/route-app.js";
+import { instanceStatusPlugin } from "../routes/instance-status.js";
+import { principalBoard, principalAgent } from "./helpers/route-app.js";
 
 const listTopCompaniesByWorkload = vi.fn();
 
@@ -45,39 +45,10 @@ vi.mock("../services/workload.js", () => ({
   }),
 }));
 
-function createApp(actor: {
-  type: "board" | "agent";
-  userId?: string;
-  roles?: string[];
-  source?: "session" | "system";
-}) {
-  const app = express();
-  app.use(express.json());
-  app.use((req, _res, next) => {
-    if (actor.type === "agent") {
-      req.principal = {
-        type: "agent",
-        id: actor.userId ?? "agent-1",
-        company_id: "550e8400-e29b-41d4-a716-446655440000",
-        roles: [],
-      };
-    } else if (actor.source === "system") {
-      req.principal = { type: "system", id: actor.userId ?? "local", roles: [] };
-    } else {
-      req.principal = {
-        type: "user",
-        id: actor.userId ?? "user-1",
-        company_ids: [],
-        roles: actor.roles ?? [],
-      };
-    }
-    next();
-  });
-
-  const api = express.Router();
-  api.use(
-    "/instance",
-    instanceStatusRoutes({} as hiveDb.Db, {
+function makePlugin(principal: ReturnType<typeof principalBoard> | ReturnType<typeof principalAgent> | { type: "agent"; id: string; company_id: string; roles: never[] } | { type: "system"; id: string; roles: never[] }) {
+  return async (fastify: FastifyInstance) => {
+    await instanceStatusPlugin(fastify, {
+      db: {} as hiveDb.Db,
       deploymentMode: "authenticated",
       deploymentExposure: "private",
       authReady: true,
@@ -89,14 +60,12 @@ function createApp(actor: {
         getWorkload: vi.fn(),
         listTopCompaniesByWorkload,
       } as any,
-    }),
-  );
-  app.use("/api", api);
-  app.use(errorHandler);
-  return app;
+    });
+  };
 }
 
 describe("instance status routes", () => {
+  let app: FastifyInstance;
   let inspectSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -119,54 +88,73 @@ describe("instance status routes", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     inspectSpy.mockRestore();
     delete process.env.HIVE_UI_MIGRATIONS_ENABLED;
+    await app?.close();
   });
 
   it("GET /api/instance/status returns 403 for agents", async () => {
-    const app = createApp({ type: "agent" });
-    const res = await request(app).get("/api/instance/status");
-    expect(res.status).toBe(403);
+    app = await createRouteTestFastify({
+      plugin: makePlugin(principalAgent({ agentId: "agent-1", companyId: "550e8400-e29b-41d4-a716-446655440000" })),
+      principal: principalAgent({ agentId: "agent-1", companyId: "550e8400-e29b-41d4-a716-446655440000" }),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/instance/status" });
+    expect(res.statusCode).toBe(403);
   });
 
   it("GET /api/instance/status returns 200 for board users", async () => {
-    const app = createApp({ type: "board", roles: [] });
-    const res = await request(app).get("/api/instance/status");
-    expect(res.status).toBe(200);
-    expect(res.body.appVersion).toBeDefined();
-    expect(res.body.migration.status).toBe("upToDate");
-    expect(res.body.workloadTop).toBeUndefined();
+    app = await createRouteTestFastify({
+      plugin: makePlugin(principalBoard({ companyIds: [], isSystem: false })),
+      principal: principalBoard({ companyIds: [], isSystem: false }),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/instance/status" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().appVersion).toBeDefined();
+    expect(res.json().migration.status).toBe("upToDate");
+    expect(res.json().workloadTop).toBeUndefined();
     expect(listTopCompaniesByWorkload).not.toHaveBeenCalled();
   });
 
   it("GET /api/instance/status includes workloadTop for instance admins", async () => {
-    const app = createApp({ type: "board", roles: ["instance_admin"] });
-    const res = await request(app).get("/api/instance/status");
-    expect(res.status).toBe(200);
-    expect(res.body.workloadTop).toHaveLength(1);
+    app = await createRouteTestFastify({
+      plugin: makePlugin(principalBoard({ companyIds: [], isInstanceAdmin: true })),
+      principal: principalBoard({ companyIds: [], isInstanceAdmin: true }),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/instance/status" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().workloadTop).toHaveLength(1);
     expect(listTopCompaniesByWorkload).toHaveBeenCalledWith(50, 10);
   });
 
   it("GET /api/instance/status includes migration filenames for instance admins", async () => {
-    const app = createApp({ type: "board", roles: ["instance_admin"] });
-    const res = await request(app).get("/api/instance/status");
-    expect(res.status).toBe(200);
-    expect(res.body.migration.appliedMigrations).toEqual(["0001_foo.sql"]);
+    app = await createRouteTestFastify({
+      plugin: makePlugin(principalBoard({ companyIds: [], isInstanceAdmin: true })),
+      principal: principalBoard({ companyIds: [], isInstanceAdmin: true }),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/instance/status" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().migration.appliedMigrations).toEqual(["0001_foo.sql"]);
   });
 
   it("POST /api/instance/migrations/apply returns 403 for non-admin", async () => {
     process.env.HIVE_UI_MIGRATIONS_ENABLED = "1";
-    const app = createApp({ type: "board", roles: [] });
-    const res = await request(app).post("/api/instance/migrations/apply").send({});
-    expect(res.status).toBe(403);
+    app = await createRouteTestFastify({
+      plugin: makePlugin(principalBoard({ companyIds: [], isSystem: false })),
+      principal: principalBoard({ companyIds: [], isSystem: false }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/instance/migrations/apply", payload: {} });
+    expect(res.statusCode).toBe(403);
   });
 
   it("POST /api/instance/migrations/apply returns 403 when UI migrations disabled", async () => {
     process.env.HIVE_UI_MIGRATIONS_ENABLED = "0";
-    const app = createApp({ type: "board", roles: ["instance_admin"] });
-    const res = await request(app).post("/api/instance/migrations/apply").send({});
-    expect(res.status).toBe(403);
+    app = await createRouteTestFastify({
+      plugin: makePlugin(principalBoard({ companyIds: [], isInstanceAdmin: true })),
+      principal: principalBoard({ companyIds: [], isInstanceAdmin: true }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/instance/migrations/apply", payload: {} });
+    expect(res.statusCode).toBe(403);
   });
 
   it("POST /api/instance/migrations/apply runs when enabled and pending", async () => {
@@ -196,10 +184,13 @@ describe("instance status routes", () => {
         appliedMigrations: ["0001_foo.sql", "0002_bar.sql"],
       });
 
-    const app = createApp({ type: "board", roles: ["instance_admin"] });
-    const res = await request(app).post("/api/instance/migrations/apply").send({});
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
+    app = await createRouteTestFastify({
+      plugin: makePlugin(principalBoard({ companyIds: [], isInstanceAdmin: true })),
+      principal: principalBoard({ companyIds: [], isInstanceAdmin: true }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/instance/migrations/apply", payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
     expect(applySpy).toHaveBeenCalled();
     applySpy.mockRestore();
   });

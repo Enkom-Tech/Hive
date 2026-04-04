@@ -1,4 +1,4 @@
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { applyPendingMigrations, inspectMigrations, type MigrationState } from "@hive/db";
 import type {
@@ -9,7 +9,6 @@ import type {
   InstanceStatusWorkloadRow,
 } from "@hive/shared";
 import { APP_VERSION } from "@hive/shared/version";
-import { getCurrentPrincipal } from "../auth/principal.js";
 import { conflict, forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { collectHealthPayload, type HealthRouteOptions } from "./health.js";
@@ -27,10 +26,10 @@ function parseUiMigrationsEnabled(deploymentMode: HealthRouteOptions["deployment
   return deploymentMode === "local_trusted";
 }
 
-function isInstanceOperator(principal: ReturnType<typeof getCurrentPrincipal>): boolean {
+function isInstanceOperator(principal: { type: string; roles?: string[] } | null | undefined): boolean {
   if (!principal) return false;
   if (principal.type === "system") return true;
-  return principal.type === "user" && principal.roles.includes("instance_admin");
+  return principal.type === "user" && Boolean(principal.roles?.includes("instance_admin"));
 }
 
 function migrationSubsystemState(
@@ -94,19 +93,20 @@ function workloadSubsystemState(rows: InstanceStatusWorkloadRow[] | undefined): 
   return "ok";
 }
 
-export function instanceStatusRoutes(
-  db: Db,
+export async function instanceStatusPlugin(
+  fastify: FastifyInstance,
   opts: HealthRouteOptions & {
+    db: Db;
     activeDatabaseConnectionString?: string;
     metricsEnabled: boolean;
     workload: ReturnType<typeof workloadService>;
   },
-) {
-  const router = Router();
+): Promise<void> {
+  const { db } = opts;
 
-  router.get("/status", async (req, res) => {
+  fastify.get("/api/instance/status", async (req, reply) => {
     assertBoard(req);
-    const principal = getCurrentPrincipal(req);
+    const principal = req.principal ?? null;
     const operator = isInstanceOperator(principal);
 
     const deployment = await collectHealthPayload(db, opts);
@@ -126,43 +126,27 @@ export function instanceStatusRoutes(
     }
 
     const migrationPayload = toMigrationPayload(migrationState, migrationInspectFailed, operator);
-
     const schedulerItems = await loadInstanceSchedulerAgents(db, principal);
     const schedulers = summarizeSchedulerAgents(schedulerItems, nowMs);
 
     let workloadTop: InstanceStatusWorkloadRow[] | undefined;
-    if (operator) {
-      workloadTop = await opts.workload.listTopCompaniesByWorkload(50, 10);
-    }
+    if (operator) workloadTop = await opts.workload.listTopCompaniesByWorkload(50, 10);
 
     let releases;
-    try {
-      releases = await getReleaseCheck(APP_VERSION);
-    } catch {
-      releases = { currentVersion: APP_VERSION };
-    }
+    try { releases = await getReleaseCheck(APP_VERSION); }
+    catch { releases = { currentVersion: APP_VERSION }; }
 
     const authBootstrap: InstanceStatusSubsystemState =
-      opts.deploymentMode === "authenticated" && deployment.bootstrapStatus === "bootstrap_pending"
-        ? "degraded"
-        : "ok";
-
-    const schedulersState: InstanceStatusSubsystemState =
-      schedulers.activeCount === 0
-        ? "ok"
-        : schedulers.staleCount > 0
-          ? "degraded"
-          : "ok";
-
-    const databaseState: InstanceStatusSubsystemState = migrationInspectFailed ? "critical" : "ok";
+      opts.deploymentMode === "authenticated" && deployment.bootstrapStatus === "bootstrap_pending" ? "degraded" : "ok";
+    const schedulersState: InstanceStatusSubsystemState = schedulers.activeCount === 0 ? "ok" : schedulers.staleCount > 0 ? "degraded" : "ok";
 
     const subsystems = {
       api: "ok" as const,
-      database: databaseState,
+      database: migrationInspectFailed ? "critical" as const : "ok" as const,
       migrations: migrationSubsystemState(migrationState, migrationInspectFailed),
       authBootstrap,
       schedulers: schedulersState,
-      workload: operator ? workloadSubsystemState(workloadTop) : ("ok" as const),
+      workload: operator ? workloadSubsystemState(workloadTop) : "ok" as const,
     };
 
     const migrationsApplyAllowed =
@@ -179,56 +163,35 @@ export function instanceStatusRoutes(
       deployment,
       migration: migrationPayload,
       schedulers,
-      prometheus: {
-        enabled: opts.metricsEnabled,
-        scrapePath: opts.metricsEnabled ? "/api/metrics" : null,
-      },
+      prometheus: { enabled: opts.metricsEnabled, scrapePath: opts.metricsEnabled ? "/api/metrics" : null },
       migrationsApplyAllowed,
       workloadTop,
     };
 
-    res.json(payload);
+    return reply.send(payload);
   });
 
-  router.post("/migrations/apply", async (req, res) => {
-    assertInstanceAdmin(req);
-    if (!parseUiMigrationsEnabled(opts.deploymentMode)) {
-      throw forbidden("UI migrations are disabled (set HIVE_UI_MIGRATIONS_ENABLED=1 to enable)");
-    }
-    if (!opts.activeDatabaseConnectionString) {
-      throw forbidden("Database connection not available for migrations");
-    }
-    if (migrationApplyInFlight) {
-      throw conflict("A migration apply is already in progress");
-    }
+  fastify.post("/api/instance/migrations/apply", async (_req, reply) => {
+    assertInstanceAdmin(_req);
+    if (!parseUiMigrationsEnabled(opts.deploymentMode)) throw forbidden("UI migrations are disabled (set HIVE_UI_MIGRATIONS_ENABLED=1 to enable)");
+    if (!opts.activeDatabaseConnectionString) throw forbidden("Database connection not available for migrations");
+    if (migrationApplyInFlight) throw conflict("A migration apply is already in progress");
 
     let state = await inspectMigrations(opts.activeDatabaseConnectionString);
     if (state.status === "upToDate") {
-      res.json({
-        ok: true,
-        migration: toMigrationPayload(state, false, true) as InstanceStatusMigrationDetail,
-      });
-      return;
+      return reply.send({ ok: true, migration: toMigrationPayload(state, false, true) as InstanceStatusMigrationDetail });
     }
     if (state.reason !== "pending-migrations") {
-      throw forbidden(
-        `Cannot apply migrations automatically (${state.reason}). Use the CLI or operator runbook.`,
-      );
+      throw forbidden(`Cannot apply migrations automatically (${state.reason}). Use the CLI or operator runbook.`);
     }
 
     migrationApplyInFlight = true;
     try {
-      logger.info(
-        { pendingMigrations: state.pendingMigrations },
-        "instance admin: applying pending migrations via API",
-      );
+      logger.info({ pendingMigrations: state.pendingMigrations }, "instance admin: applying pending migrations via API");
       await applyPendingMigrations(opts.activeDatabaseConnectionString);
       state = await inspectMigrations(opts.activeDatabaseConnectionString);
       logger.info({ status: state.status }, "instance admin: migrations apply finished");
-      res.json({
-        ok: true,
-        migration: toMigrationPayload(state, false, true) as InstanceStatusMigrationDetail,
-      });
+      return reply.send({ ok: true, migration: toMigrationPayload(state, false, true) as InstanceStatusMigrationDetail });
     } catch (err) {
       logger.error({ err }, "instance admin: migrations apply failed");
       throw err;
@@ -236,6 +199,4 @@ export function instanceStatusRoutes(
       migrationApplyInFlight = false;
     }
   });
-
-  return router;
 }

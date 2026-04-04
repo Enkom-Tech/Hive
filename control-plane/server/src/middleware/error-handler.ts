@@ -1,4 +1,3 @@
-import type { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
 import { HttpError } from "../errors.js";
 
@@ -11,30 +10,45 @@ export interface ErrorContext {
   reqQuery?: unknown;
 }
 
+interface ErrorRequest {
+  method: string;
+  originalUrl?: string;
+  url?: string;
+  body?: unknown;
+  params?: unknown;
+  query?: unknown;
+}
+
+interface ErrorResponse {
+  status(code: number): this;
+  json(body: unknown): void;
+  [key: string]: unknown;
+}
+
 function attachErrorContext(
-  req: Request,
-  res: Response,
+  req: ErrorRequest,
+  res: ErrorResponse,
   payload: ErrorContext["error"],
   rawError?: Error,
 ) {
-  (res as any).__errorContext = {
+  (res as Record<string, unknown>).__errorContext = {
     error: payload,
     method: req.method,
-    url: req.originalUrl,
+    url: req.originalUrl ?? req.url ?? "",
     reqBody: req.body,
     reqParams: req.params,
     reqQuery: req.query,
   } satisfies ErrorContext;
   if (rawError) {
-    (res as any).err = rawError;
+    (res as Record<string, unknown>).err = rawError;
   }
 }
 
 export function errorHandler(
   err: unknown,
-  req: Request,
-  res: Response,
-  _next: NextFunction,
+  req: ErrorRequest,
+  res: ErrorResponse,
+  _next: (err?: unknown) => void,
 ) {
   if (err instanceof HttpError) {
     if (err.status >= 500) {

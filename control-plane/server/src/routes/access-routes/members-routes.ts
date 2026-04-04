@@ -1,9 +1,7 @@
-import type { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { updateMemberPermissionsSchema } from "@hive/shared";
 import { notFound } from "../../errors.js";
-import { getCurrentPrincipal } from "../../auth/principal.js";
-import { validate } from "../../middleware/validate.js";
 import { assertCompanyPermission } from "../authz.js";
 
 export type MembersRoutesDeps = {
@@ -11,31 +9,24 @@ export type MembersRoutesDeps = {
   access: ReturnType<typeof import("../../services/access.js").accessService>;
 };
 
-export function registerMembersRoutes(router: Router, deps: MembersRoutesDeps): void {
+export function registerMembersRoutesF(fastify: FastifyInstance, deps: MembersRoutesDeps): void {
   const { db, access } = deps;
 
-  router.get("/companies/:companyId/members", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/members", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyPermission(db, req, companyId, "users:manage_permissions");
-    const members = await access.listMembers(companyId);
-    res.json(members);
+    return reply.send(await access.listMembers(companyId));
   });
 
-  router.patch(
-    "/companies/:companyId/members/:memberId/permissions",
-    validate(updateMemberPermissionsSchema),
-    async (req, res) => {
-      const companyId = req.params.companyId as string;
-      const memberId = req.params.memberId as string;
-      await assertCompanyPermission(db, req, companyId, "users:manage_permissions");
-      const updated = await access.setMemberPermissions(
-        companyId,
-        memberId,
-        req.body.grants ?? [],
-        getCurrentPrincipal(req)?.id ?? null
-      );
-      if (!updated) throw notFound("Member not found");
-      res.json(updated);
-    }
-  );
+  fastify.patch<{ Params: { companyId: string; memberId: string } }>("/api/companies/:companyId/members/:memberId/permissions", async (req, reply) => {
+    const { companyId, memberId } = req.params;
+    await assertCompanyPermission(db, req, companyId, "users:manage_permissions");
+    const parsed = updateMemberPermissionsSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    const body = parsed.data as { grants?: unknown[] };
+    const p = req.principal ?? null;
+    const updated = await access.setMemberPermissions(companyId, memberId, (body.grants ?? []) as Parameters<typeof access.setMemberPermissions>[2], p?.id ?? null);
+    if (!updated) throw notFound("Member not found");
+    return reply.send(updated);
+  });
 }

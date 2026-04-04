@@ -1,8 +1,6 @@
-import type { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { resetAgentSessionSchema, wakeAgentSchema } from "@hive/shared";
-import { validate } from "../../middleware/validate.js";
-import { getCurrentPrincipal } from "../../auth/principal.js";
 import { assertCompanyPermission, assertCompanyRead, getActorInfo } from "../authz.js";
 import { redactEventPayload } from "../../redaction.js";
 import { logActivity } from "../../services/index.js";
@@ -13,163 +11,108 @@ export type AgentRuntimeRoutesDeps = {
   heartbeat: ReturnType<typeof import("../../services/index.js").heartbeatService>;
 };
 
-export function registerAgentRuntimeRoutes(router: Router, deps: AgentRuntimeRoutesDeps): void {
+export function registerAgentRuntimeRoutesF(fastify: FastifyInstance, deps: AgentRuntimeRoutesDeps): void {
   const { db, svc, heartbeat } = deps;
 
-  router.post("/agents/:id/wakeup", validate(wakeAgentSchema), async (req, res) => {
-    const id = req.params.id as string;
+  fastify.post<{ Params: { id: string } }>("/api/agents/:id/wakeup", async (req, reply) => {
+    const { id } = req.params;
+    const parsed = wakeAgentSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
-    const pWake = getCurrentPrincipal(req);
-    if (pWake?.type === "agent" && pWake.id !== id) {
-      res.status(403).json({ error: "Agent can only invoke itself" });
-      return;
-    }
+    const p = req.principal ?? null;
+    if (p?.type === "agent" && p.id !== id) return reply.status(403).send({ error: "Agent can only invoke itself" });
+    const body = parsed.data as { source?: string; triggerDetail?: string; reason?: string | null; payload?: unknown; idempotencyKey?: string | null };
     const run = await heartbeat.wakeup(id, {
-      source: req.body.source,
-      triggerDetail: req.body.triggerDetail ?? "manual",
-      reason: req.body.reason ?? null,
-      payload: req.body.payload ?? null,
-      idempotencyKey: req.body.idempotencyKey ?? null,
-      requestedByActorType: pWake?.type === "agent" ? "agent" : "user",
-      requestedByActorId: pWake?.type === "agent" ? pWake.id ?? null : pWake?.id ?? null,
-      contextSnapshot: {
-        triggeredBy: pWake?.type ?? "user",
-        actorId: pWake?.type === "agent" ? pWake.id : pWake?.id,
-      },
+      source: body.source as "on_demand" | "timer" | "assignment" | "automation" | undefined,
+      triggerDetail: (body.triggerDetail ?? "manual") as "manual" | "system" | "ping" | "callback" | undefined,
+      reason: body.reason ?? null,
+      payload: (body.payload ?? null) as Record<string, unknown> | null,
+      idempotencyKey: body.idempotencyKey ?? null,
+      requestedByActorType: p?.type === "agent" ? "agent" : "user",
+      requestedByActorId: p?.type === "agent" ? p.id ?? null : p?.id ?? null,
+      contextSnapshot: { triggeredBy: p?.type ?? "user", actorId: p?.type === "agent" ? p.id : p?.id },
     });
-    if (!run) {
-      res.status(202).json({ status: "skipped" });
-      return;
-    }
+    if (!run) return reply.status(202).send({ status: "skipped" });
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: agent.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "heartbeat.invoked",
-      entityType: "heartbeat_run",
-      entityId: run.id,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "heartbeat.invoked", entityType: "heartbeat_run", entityId: run.id,
       details: { agentId: id },
     });
-    res.status(202).json(run);
+    return reply.status(202).send(run);
   });
 
-  router.post("/agents/:id/heartbeat/invoke", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.post<{ Params: { id: string } }>("/api/agents/:id/heartbeat/invoke", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
-    const pWake = getCurrentPrincipal(req);
-    if (pWake?.type === "agent" && pWake.id !== id) {
-      res.status(403).json({ error: "Agent can only invoke itself" });
-      return;
-    }
+    const p = req.principal ?? null;
+    if (p?.type === "agent" && p.id !== id) return reply.status(403).send({ error: "Agent can only invoke itself" });
     const run = await heartbeat.invoke(
-      id,
-      "on_demand",
-      {
-        triggeredBy: pWake?.type ?? "user",
-        actorId: pWake?.type === "agent" ? pWake.id : pWake?.id,
-      },
+      id, "on_demand",
+      { triggeredBy: p?.type ?? "user", actorId: p?.type === "agent" ? p.id : p?.id },
       "manual",
-      {
-        actorType: pWake?.type === "agent" ? "agent" : "user",
-        actorId: pWake?.type === "agent" ? pWake.id ?? null : pWake?.id ?? null,
-      },
+      { actorType: p?.type === "agent" ? "agent" : "user", actorId: p?.type === "agent" ? p.id ?? null : p?.id ?? null },
     );
-    if (!run) {
-      res.status(202).json({ status: "skipped" });
-      return;
-    }
+    if (!run) return reply.status(202).send({ status: "skipped" });
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: agent.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "heartbeat.invoked",
-      entityType: "heartbeat_run",
-      entityId: run.id,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
+      action: "heartbeat.invoked", entityType: "heartbeat_run", entityId: run.id,
       details: { agentId: id },
     });
-    res.status(202).json(run);
+    return reply.status(202).send(run);
   });
 
-  router.post("/agents/:id/claude-login", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.post<{ Params: { id: string } }>("/api/agents/:id/claude-login", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
-    res.status(400).json({
-      error: "Agent login is not supported for managed_worker adapter.",
-    });
+    return reply.status(400).send({ error: "Agent login is not supported for managed_worker adapter." });
   });
 
-  router.get("/agents/:id/runtime-state", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.get<{ Params: { id: string } }>("/api/agents/:id/runtime-state", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
-    const state = await heartbeat.getRuntimeState(id);
-    res.json(state);
+    return reply.send(await heartbeat.getRuntimeState(id));
   });
 
-  router.get("/agents/:id/task-sessions", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.get<{ Params: { id: string } }>("/api/agents/:id/task-sessions", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
     const sessions = await heartbeat.listTaskSessions(id);
-    res.json(
-      sessions.map((session) => ({
-        ...session,
-        sessionParamsJson: redactEventPayload(session.sessionParamsJson ?? null),
-      })),
-    );
+    return reply.send(sessions.map((session) => ({ ...session, sessionParamsJson: redactEventPayload(session.sessionParamsJson ?? null) })));
   });
 
-  router.post("/agents/:id/runtime-state/reset-session", validate(resetAgentSessionSchema), async (req, res) => {
-    const id = req.params.id as string;
+  fastify.post<{ Params: { id: string } }>("/api/agents/:id/runtime-state/reset-session", async (req, reply) => {
+    const { id } = req.params;
+    const parsed = resetAgentSessionSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyPermission(db, req, agent.companyId, "runs:board");
-    const taskKey =
-      typeof req.body.taskKey === "string" && req.body.taskKey.trim().length > 0
-        ? req.body.taskKey.trim()
-        : null;
+    const body = parsed.data as { taskKey?: string };
+    const taskKey = typeof body.taskKey === "string" && body.taskKey.trim().length > 0 ? body.taskKey.trim() : null;
     const state = await heartbeat.resetRuntimeSession(id, { taskKey });
+    const p = req.principal ?? null;
     await logActivity(db, {
       companyId: agent.companyId,
-      actorType: "user",
-      actorId: getCurrentPrincipal(req)?.id ?? "board",
-      action: "agent.runtime_session_reset",
-      entityType: "agent",
-      entityId: id,
+      actorType: "user", actorId: p?.id ?? "board",
+      action: "agent.runtime_session_reset", entityType: "agent", entityId: id,
       details: { taskKey: taskKey ?? null },
     });
-    res.json(state);
+    return reply.send(state);
   });
 }

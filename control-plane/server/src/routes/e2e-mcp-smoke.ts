@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import { and, eq, notInArray } from "drizzle-orm";
 import type { Db } from "@hive/db";
 import { agents, workerInstanceAgents, workerInstances } from "@hive/db";
@@ -14,31 +14,28 @@ function safeEqualUtf8(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-export function e2eMcpSmokeRoutes(
-  db: Db,
-  opts: { materializeSecret: string; serverPort: number },
-): Router {
-  const router = Router();
+export async function e2eMcpSmokePlugin(
+  fastify: FastifyInstance,
+  opts: { db: Db; materializeSecret: string; serverPort: number },
+): Promise<void> {
   const expectedSecret = opts.materializeSecret.trim();
 
-  router.post("/materialize", async (req, res) => {
-    const hdr = req.headers["x-hive-e2e-mcp-secret"];
+  fastify.post("/api/e2e/mcp-smoke/materialize", async (req, reply) => {
+    const rawHdr = req.headers["x-hive-e2e-mcp-secret"];
     const got =
-      typeof hdr === "string" ? hdr.trim() : Array.isArray(hdr) ? (hdr[0]?.trim() ?? "") : "";
+      typeof rawHdr === "string" ? rawHdr.trim() : Array.isArray(rawHdr) ? (rawHdr[0]?.trim() ?? "") : "";
     if (!safeEqualUtf8(got, expectedSecret)) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
+      return reply.status(403).send({ error: "Forbidden" });
     }
 
     if (!process.env.HIVE_WORKER_JWT_SECRET?.trim()) {
-      res.status(503).json({
+      return reply.status(503).send({
         error: "worker_jwt_unconfigured",
         message: "Set HIVE_WORKER_JWT_SECRET so worker JWTs can be minted.",
       });
-      return;
     }
 
-    const agentRow = await db
+    const agentRow = await opts.db
       .select({ id: agents.id, companyId: agents.companyId })
       .from(agents)
       .where(notInArray(agents.status, ["terminated", "pending_approval"]))
@@ -46,16 +43,15 @@ export function e2eMcpSmokeRoutes(
       .then((rows) => rows[0] ?? null);
 
     if (!agentRow) {
-      res.status(503).json({
+      return reply.status(503).send({
         error: "no_agent",
         message:
           "No usable agents in the database. Run onboarding E2E first or seed agents so this smoke test can bind a worker.",
       });
-      return;
     }
 
     let instanceId: string | null = null;
-    const existing = await db
+    const existing = await opts.db
       .select({ id: workerInstances.id })
       .from(workerInstances)
       .where(
@@ -71,7 +67,7 @@ export function e2eMcpSmokeRoutes(
       instanceId = existing.id;
     } else {
       try {
-        const [created] = await db
+        const [created] = await opts.db
           .insert(workerInstances)
           .values({
             companyId: agentRow.companyId,
@@ -83,7 +79,7 @@ export function e2eMcpSmokeRoutes(
           .returning({ id: workerInstances.id });
         instanceId = created?.id ?? null;
       } catch {
-        const again = await db
+        const again = await opts.db
           .select({ id: workerInstances.id })
           .from(workerInstances)
           .where(
@@ -99,12 +95,11 @@ export function e2eMcpSmokeRoutes(
     }
 
     if (!instanceId) {
-      res.status(500).json({ error: "worker_instance_upsert_failed" });
-      return;
+      return reply.status(500).send({ error: "worker_instance_upsert_failed" });
     }
 
     const now = new Date();
-    await db
+    await opts.db
       .insert(workerInstanceAgents)
       .values({
         workerInstanceId: instanceId,
@@ -123,16 +118,15 @@ export function e2eMcpSmokeRoutes(
 
     const tokenPack = mintWorkerApiToken(instanceId, agentRow.companyId);
     if (!tokenPack) {
-      res.status(503).json({ error: "worker_jwt_mint_failed" });
-      return;
+      return reply.status(503).send({ error: "worker_jwt_mint_failed" });
     }
 
-    const xfProto = req.get("x-forwarded-proto");
-    const proto = (xfProto?.split(",")[0]?.trim() || req.protocol || "http").replace(/:$/, "");
-    const host = req.get("host") ?? `127.0.0.1:${opts.serverPort}`;
+    const xfProto = (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim();
+    const proto = (xfProto || req.protocol || "http").replace(/:$/, "");
+    const host = (req.headers.host as string | undefined) ?? `127.0.0.1:${opts.serverPort}`;
     const apiBase = `${proto}://${host}`;
 
-    res.status(200).json({
+    return reply.status(200).send({
       apiBase,
       companyId: agentRow.companyId,
       agentId: agentRow.id,
@@ -140,6 +134,4 @@ export function e2eMcpSmokeRoutes(
       workerJwt: tokenPack.token,
     });
   });
-
-  return router;
 }

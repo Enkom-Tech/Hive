@@ -1,4 +1,4 @@
-import { Router } from "express";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Db } from "@hive/db";
 import { agents as agentsTable, companies } from "@hive/db";
@@ -10,7 +10,6 @@ import {
   assertCanUpdateAgent,
   type AgentRoutesCommonDeps,
 } from "./common.js";
-import { getCurrentPrincipal } from "../../auth/principal.js";
 import { assertBoard, assertCompanyRead, getActorInfo } from "../authz.js";
 import { redactEventPayload } from "../../redaction.js";
 import type { LogActivityInput } from "../../services/activity-log.js";
@@ -151,7 +150,7 @@ function redactAgentConfiguration(
   };
 }
 
-export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDeps): void {
+export function registerAgentListGetRoutesF(fastify: FastifyInstance, deps: AgentListGetDeps): void {
   const {
     db,
     agentService: svc,
@@ -164,87 +163,57 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
   } = deps;
   const commonDeps = { db, access, agentService: svc };
 
-  router.get("/companies/:companyId/agents", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/agents", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyRead(db, req, companyId);
     const result = await svc.list(companyId);
     const canReadConfigs = await actorCanReadConfigurationsForCompany(req, companyId, commonDeps);
-    const p = getCurrentPrincipal(req);
-    if (canReadConfigs || p?.type === "user" || p?.type === "system") {
-      res.json(result);
-      return;
-    }
-    res.json(result.map((agent) => redactForRestrictedAgentView(agent)));
+    const p = req.principal ?? null;
+    if (canReadConfigs || p?.type === "user" || p?.type === "system") return reply.send(result);
+    return reply.send(result.map((agent) => redactForRestrictedAgentView(agent)));
   });
 
-  router.get("/companies/:companyId/drones/overview", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/drones/overview", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyRead(db, req, companyId);
-    const overview = await svc.listDroneBoardAgentOverview(companyId);
-    res.json(overview);
+    return reply.send(await svc.listDroneBoardAgentOverview(companyId));
   });
 
-  router.get("/instance/scheduler-heartbeats", async (req, res) => {
+  fastify.get("/api/instance/scheduler-heartbeats", async (req, reply) => {
     assertBoard(req);
-    const pSched = getCurrentPrincipal(req);
+    const pSched = req.principal ?? null;
     const accessConditions = [];
     if (pSched?.type !== "system" && !pSched?.roles?.includes("instance_admin")) {
       const allowedCompanyIds = pSched?.company_ids ?? [];
-      if (allowedCompanyIds.length === 0) {
-        res.json([]);
-        return;
-      }
+      if (allowedCompanyIds.length === 0) return reply.send([]);
       accessConditions.push(inArray(agentsTable.companyId, allowedCompanyIds));
     }
 
-    const rows = await db
-      .select({
-        id: agentsTable.id,
-        companyId: agentsTable.companyId,
-        agentName: agentsTable.name,
-        role: agentsTable.role,
-        title: agentsTable.title,
-        status: agentsTable.status,
-        adapterType: agentsTable.adapterType,
-        runtimeConfig: agentsTable.runtimeConfig,
-        lastHeartbeatAt: agentsTable.lastHeartbeatAt,
-        companyName: companies.name,
-        companyIssuePrefix: companies.issuePrefix,
-      })
-      .from(agentsTable)
-      .innerJoin(companies, eq(agentsTable.companyId, companies.id))
+    const rows = await db.select({
+      id: agentsTable.id, companyId: agentsTable.companyId, agentName: agentsTable.name,
+      role: agentsTable.role, title: agentsTable.title, status: agentsTable.status,
+      adapterType: agentsTable.adapterType, runtimeConfig: agentsTable.runtimeConfig,
+      lastHeartbeatAt: agentsTable.lastHeartbeatAt, companyName: companies.name,
+      companyIssuePrefix: companies.issuePrefix,
+    }).from(agentsTable).innerJoin(companies, eq(agentsTable.companyId, companies.id))
       .where(accessConditions.length > 0 ? and(...accessConditions) : undefined)
       .orderBy(companies.name, agentsTable.name);
 
-    const items: InstanceSchedulerHeartbeatAgent[] = rows
-      .map((row) => {
-        const policy = parseSchedulerHeartbeatPolicy(row.runtimeConfig);
-        const statusEligible =
-          row.status !== "paused" && row.status !== "terminated" && row.status !== "pending_approval";
-        return {
-          id: row.id,
-          companyId: row.companyId,
-          companyName: row.companyName,
-          companyIssuePrefix: row.companyIssuePrefix,
-          agentName: row.agentName,
-          agentUrlKey: deriveAgentUrlKey(row.agentName, row.id),
-          role: row.role as InstanceSchedulerHeartbeatAgent["role"],
-          title: row.title,
-          status: row.status as InstanceSchedulerHeartbeatAgent["status"],
-          adapterType: row.adapterType,
-          intervalSec: policy.intervalSec,
-          heartbeatEnabled: policy.enabled,
-          schedulerActive: statusEligible && policy.enabled && policy.intervalSec > 0,
-          lastHeartbeatAt: row.lastHeartbeatAt,
-        };
-      })
-      .filter(
-        (item) =>
-          item.intervalSec > 0 &&
-          item.status !== "paused" &&
-          item.status !== "terminated" &&
-          item.status !== "pending_approval",
-      )
+    const items: InstanceSchedulerHeartbeatAgent[] = rows.map((row) => {
+      const policy = parseSchedulerHeartbeatPolicy(row.runtimeConfig);
+      const statusEligible = row.status !== "paused" && row.status !== "terminated" && row.status !== "pending_approval";
+      return {
+        id: row.id, companyId: row.companyId, companyName: row.companyName,
+        companyIssuePrefix: row.companyIssuePrefix, agentName: row.agentName,
+        agentUrlKey: deriveAgentUrlKey(row.agentName, row.id),
+        role: row.role as InstanceSchedulerHeartbeatAgent["role"],
+        title: row.title, status: row.status as InstanceSchedulerHeartbeatAgent["status"],
+        adapterType: row.adapterType, intervalSec: policy.intervalSec,
+        heartbeatEnabled: policy.enabled,
+        schedulerActive: statusEligible && policy.enabled && policy.intervalSec > 0,
+        lastHeartbeatAt: row.lastHeartbeatAt,
+      };
+    }).filter((item) => item.intervalSec > 0 && item.status !== "paused" && item.status !== "terminated" && item.status !== "pending_approval")
       .sort((left, right) => {
         if (left.schedulerActive !== right.schedulerActive) return left.schedulerActive ? -1 : 1;
         const companyOrder = left.companyName.localeCompare(right.companyName);
@@ -252,72 +221,53 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
         return left.agentName.localeCompare(right.agentName);
       });
 
-    res.json(items);
+    return reply.send(items);
   });
 
-  router.get("/companies/:companyId/org", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/org", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCompanyRead(db, req, companyId);
     const tree = await svc.orgForCompany(companyId);
-    const leanTree = tree.map((node) => toLeanOrgNode(node as Record<string, unknown>));
-    res.json(leanTree);
+    return reply.send(tree.map((node) => toLeanOrgNode(node as Record<string, unknown>)));
   });
 
-  router.get("/companies/:companyId/agent-configurations", async (req, res) => {
-    const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>("/api/companies/:companyId/agent-configurations", async (req, reply) => {
+    const { companyId } = req.params;
     await assertCanReadConfigurations(req, companyId, commonDeps);
     const rows = await svc.list(companyId);
-    res.json(rows.map((row) => redactAgentConfiguration(row)));
+    return reply.send(rows.map((row) => redactAgentConfiguration(row)));
   });
 
-  router.get("/agents/me", async (req, res) => {
-    const pMe = getCurrentPrincipal(req);
-    if (pMe?.type !== "agent" || !pMe.id) {
-      res.status(401).json({ error: "Agent authentication required" });
-      return;
-    }
-    const agent = await svc.getById(pMe.id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+  fastify.get("/api/agents/me", async (req, reply) => {
+    const p = req.principal ?? null;
+    if (p?.type !== "agent" || !p.id) return reply.status(401).send({ error: "Agent authentication required" });
+    const agent = await svc.getById(p.id);
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     const chainOfCommand = await svc.getChainOfCommand(agent.id);
-    res.json({ ...agent, chainOfCommand });
+    return reply.send({ ...agent, chainOfCommand });
   });
 
-  router.get("/agents/:id/attribution", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.get<{ Params: { id: string } }>("/api/agents/:id/attribution", async (req, reply) => {
+    const { id } = req.params;
     const parsed = agentAttributionQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      res.status(400).json({ error: "Invalid query", details: parsed.error.issues });
-      return;
-    }
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid query", details: parsed.error.issues });
     const { activityLimit, runsLimit, from: fromStr, to: toStr, privileged } = parsed.data;
     const from = fromStr ? new Date(fromStr) : undefined;
     const to = toStr ? new Date(toStr) : undefined;
     const range = from || to ? { from, to } : undefined;
 
     let agentId = id;
-    const pAttr = getCurrentPrincipal(req);
+    const p = req.principal ?? null;
     if (id === "me") {
-      if (pAttr?.type !== "agent" || !pAttr.id) {
-        res.status(400).json({ error: "Use /agents/me/attribution with agent authentication" });
-        return;
-      }
-      agentId = pAttr.id;
+      if (p?.type !== "agent" || !p.id) return reply.status(400).send({ error: "Use /agents/me/attribution with agent authentication" });
+      agentId = p.id;
     }
 
     const agent = await svc.getById(agentId);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
 
-    if (pAttr?.type === "agent" && pAttr.id !== agentId) {
-      res.status(403).json({ error: "Agent can only view own attribution" });
-      return;
-    }
+    if (p?.type === "agent" && p.id !== agentId) return reply.status(403).send({ error: "Agent can only view own attribution" });
 
     const [activity, byAgentRows, runs] = await Promise.all([
       activitySvc.list({ companyId: agent.companyId, agentId, limit: activityLimit }),
@@ -328,148 +278,96 @@ export function registerAgentListGetRoutes(router: Router, deps: AgentListGetDep
     const agentRow = byAgentRows.find((r) => r.agentId != null && r.agentId === agentId);
     const spendCents = agentRow?.costCents ?? 0;
     const budgetCents = agent.budgetMonthlyCents ?? 0;
-    const utilizationPercent =
-      budgetCents > 0 ? Number(((spendCents / budgetCents) * 100).toFixed(2)) : 0;
+    const utilizationPercent = budgetCents > 0 ? Number(((spendCents / budgetCents) * 100).toFixed(2)) : 0;
+    const cost = { spendCents, budgetCents, utilizationPercent, ...(range?.from && range?.to && { period: { from: range.from.toISOString(), to: range.to.toISOString() } }) };
 
-    const cost = {
-      spendCents,
-      budgetCents,
-      utilizationPercent,
-      ...(range?.from &&
-        range?.to && { period: { from: range.from.toISOString(), to: range.to.toISOString() } }),
-    };
+    const payload: { agentId: string; companyId: string; cost: typeof cost; activity: typeof activity; runs: typeof runs; companySpendCents?: number; companyBudgetCents?: number } =
+      { agentId, companyId: agent.companyId, cost, activity, runs };
 
-    const payload: {
-      agentId: string;
-      companyId: string;
-      cost: typeof cost;
-      activity: typeof activity;
-      runs: typeof runs;
-      companySpendCents?: number;
-      companyBudgetCents?: number;
-    } = { agentId, companyId: agent.companyId, cost, activity, runs };
-
-    if ((pAttr?.type === "user" || pAttr?.type === "system") && privileged) {
+    if ((p?.type === "user" || p?.type === "system") && privileged) {
       const summary = await costs.summary(agent.companyId, range);
       payload.companySpendCents = summary.spendCents;
       payload.companyBudgetCents = summary.budgetCents;
     }
-
-    res.json(payload);
+    return reply.send(payload);
   });
 
-  router.get("/agents/:id", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.get<{ Params: { id: string } }>("/api/agents/:id", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
-    const pGet = getCurrentPrincipal(req);
-    if (pGet?.type === "agent" && pGet.id !== id) {
+    const p = req.principal ?? null;
+    if (p?.type === "agent" && p.id !== id) {
       const canRead = await actorCanReadConfigurationsForCompany(req, agent.companyId, commonDeps);
       if (!canRead) {
         const chainOfCommand = await svc.getChainOfCommand(agent.id);
-        res.json({ ...redactForRestrictedAgentView(agent), chainOfCommand });
-        return;
+        return reply.send({ ...redactForRestrictedAgentView(agent), chainOfCommand });
       }
     }
     const chainOfCommand = await svc.getChainOfCommand(agent.id);
-    res.json({ ...agent, chainOfCommand });
+    return reply.send({ ...agent, chainOfCommand });
   });
 
-  router.get("/agents/:id/worker-connection", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.get<{ Params: { id: string } }>("/api/agents/:id/worker-connection", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCompanyRead(db, req, agent.companyId);
-    const pConn = getCurrentPrincipal(req);
-    if (pConn?.type === "agent" && pConn.id !== id) {
+    const p = req.principal ?? null;
+    if (p?.type === "agent" && p.id !== id) {
       const canRead = await actorCanReadConfigurationsForCompany(req, agent.companyId, commonDeps);
-      if (!canRead) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      if (!canRead) return reply.status(403).send({ error: "Forbidden" });
     }
-    res.json({ connected: isAgentWorkerConnected(id) });
+    return reply.send({ connected: isAgentWorkerConnected(id) });
   });
 
-  router.get("/agents/:id/configuration", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.get<{ Params: { id: string } }>("/api/agents/:id/configuration", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCanReadConfigurations(req, agent.companyId, commonDeps);
-    res.json(redactAgentConfiguration(agent));
+    return reply.send(redactAgentConfiguration(agent));
   });
 
-  router.get("/agents/:id/config-revisions", async (req, res) => {
-    const id = req.params.id as string;
+  fastify.get<{ Params: { id: string } }>("/api/agents/:id/config-revisions", async (req, reply) => {
+    const { id } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCanReadConfigurations(req, agent.companyId, commonDeps);
     const revisions = await svc.listConfigRevisions(id);
-    res.json(revisions.map((revision) => redactConfigRevision(revision)));
+    return reply.send(revisions.map((revision) => redactConfigRevision(revision)));
   });
 
-  router.get("/agents/:id/config-revisions/:revisionId", async (req, res) => {
-    const id = req.params.id as string;
-    const revisionId = req.params.revisionId as string;
+  fastify.get<{ Params: { id: string; revisionId: string } }>("/api/agents/:id/config-revisions/:revisionId", async (req, reply) => {
+    const { id, revisionId } = req.params;
     const agent = await svc.getById(id);
-    if (!agent) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!agent) return reply.status(404).send({ error: "Agent not found" });
     await assertCanReadConfigurations(req, agent.companyId, commonDeps);
     const revision = await svc.getConfigRevision(id, revisionId);
-    if (!revision) {
-      res.status(404).json({ error: "Revision not found" });
-      return;
-    }
-    res.json(redactConfigRevision(revision));
+    if (!revision) return reply.status(404).send({ error: "Revision not found" });
+    return reply.send(redactConfigRevision(revision));
   });
 
-  router.post("/agents/:id/config-revisions/:revisionId/rollback", async (req, res) => {
-    const id = req.params.id as string;
-    const revisionId = req.params.revisionId as string;
+  fastify.post<{ Params: { id: string; revisionId: string } }>("/api/agents/:id/config-revisions/:revisionId/rollback", async (req, reply) => {
+    const { id, revisionId } = req.params;
     const existing = await svc.getById(id);
-    if (!existing) {
-      res.status(404).json({ error: "Agent not found" });
-      return;
-    }
+    if (!existing) return reply.status(404).send({ error: "Agent not found" });
     await assertCanUpdateAgent(req, existing, commonDeps);
-
     const actor = getActorInfoFn(req);
     const updated = await svc.rollbackConfigRevision(id, revisionId, {
       agentId: actor.agentId,
       userId: actor.actorType === "user" ? actor.actorId : null,
     });
-    if (!updated) {
-      res.status(404).json({ error: "Revision not found" });
-      return;
-    }
-
+    if (!updated) return reply.status(404).send({ error: "Revision not found" });
     await logActivityFn({
       companyId: updated.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
+      actorType: actor.actorType, actorId: actor.actorId,
+      agentId: actor.agentId, runId: actor.runId,
       action: "agent.config_rolled_back",
-      entityType: "agent",
-      entityId: updated.id,
+      entityType: "agent", entityId: updated.id,
       details: { revisionId },
     });
-
-    res.json(updated);
+    return reply.send(updated);
   });
 }

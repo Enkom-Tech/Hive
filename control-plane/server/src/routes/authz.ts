@@ -1,9 +1,26 @@
-import type { Request } from "express";
 import type { Db } from "@hive/db";
-import type { PermissionKey } from "@hive/shared";
-import { getCurrentPrincipal, isLocalImplicit } from "../auth/principal.js";
+import type { PermissionKey, Principal } from "@hive/shared";
 import { forbidden, unauthorized } from "../errors.js";
 import { accessService } from "../services/access.js";
+import { LOCAL_BOARD_USER_ID } from "../board-claim.js";
+
+/**
+ * Minimal interface satisfied by both Express.Request and FastifyRequest.
+ * Only `principal` is required here; header access is handled per-helper.
+ */
+export interface PrincipalCarrier {
+  principal?: Principal | null;
+}
+
+export function getCurrentPrincipalFromCarrier(req: PrincipalCarrier): Principal | null {
+  return req.principal ?? null;
+}
+
+function isLocalImplicitFromCarrier(req: PrincipalCarrier): boolean {
+  const p = getCurrentPrincipalFromCarrier(req);
+  if (p?.type === "system") return true;
+  return p?.type === "user" && p.id === LOCAL_BOARD_USER_ID;
+}
 
 /** When true, local_trusted `local-board` user must pass normal grant checks (integration / CI RBAC tests). */
 function rbacEnforceForLocalImplicitBoard(): boolean {
@@ -11,17 +28,17 @@ function rbacEnforceForLocalImplicitBoard(): boolean {
   return v === "1" || v === "true" || v === "yes";
 }
 
-export function assertBoard(req: Request) {
-  const p = getCurrentPrincipal(req);
+export function assertBoard(req: PrincipalCarrier) {
+  const p = getCurrentPrincipalFromCarrier(req);
   const isBoard = p?.type === "user" || p?.type === "system";
   if (!isBoard) {
     throw forbidden("Board access required");
   }
 }
 
-export function assertInstanceAdmin(req: Request) {
+export function assertInstanceAdmin(req: PrincipalCarrier) {
   assertBoard(req);
-  const p = getCurrentPrincipal(req);
+  const p = getCurrentPrincipalFromCarrier(req);
   if (p?.type === "system") {
     return;
   }
@@ -37,19 +54,19 @@ export function assertInstanceAdmin(req: Request) {
  */
 export async function assertCompanyPermission(
   db: Db,
-  req: Request,
+  req: PrincipalCarrier,
   companyId: string,
   permissionKey: PermissionKey,
 ): Promise<void> {
   assertCompanyAccess(req, companyId);
-  const p = getCurrentPrincipal(req);
+  const p = getCurrentPrincipalFromCarrier(req);
   if (p?.type === "worker_instance") {
     throw forbidden("Worker instance cannot use board permission checks");
   }
   if (p?.type === "system") {
     return;
   }
-  if (isLocalImplicit(req) && !rbacEnforceForLocalImplicitBoard()) {
+  if (isLocalImplicitFromCarrier(req) && !rbacEnforceForLocalImplicitBoard()) {
     return;
   }
   const access = accessService(db);
@@ -68,12 +85,12 @@ export async function assertCompanyPermission(
   throw forbidden("Permission denied");
 }
 
-export async function assertCompanyRead(db: Db, req: Request, companyId: string): Promise<void> {
+export async function assertCompanyRead(db: Db, req: PrincipalCarrier, companyId: string): Promise<void> {
   await assertCompanyPermission(db, req, companyId, "company:read");
 }
 
-export function assertCompanyAccess(req: Request, companyId: string) {
-  const p = getCurrentPrincipal(req);
+export function assertCompanyAccess(req: PrincipalCarrier, companyId: string) {
+  const p = getCurrentPrincipalFromCarrier(req);
   if (!p) {
     throw unauthorized();
   }
@@ -99,16 +116,16 @@ export function assertCompanyAccess(req: Request, companyId: string) {
   }
 }
 
-export function assertWorkerInstance(req: Request): { workerInstanceRowId: string; companyId: string } {
-  const p = getCurrentPrincipal(req);
+export function assertWorkerInstance(req: PrincipalCarrier): { workerInstanceRowId: string; companyId: string } {
+  const p = getCurrentPrincipalFromCarrier(req);
   if (!p || p.type !== "worker_instance" || !p.company_id || !p.workerInstanceRowId) {
     throw forbidden("Worker instance authentication required");
   }
   return { workerInstanceRowId: p.workerInstanceRowId, companyId: p.company_id };
 }
 
-export function getActorInfo(req: Request) {
-  const p = getCurrentPrincipal(req);
+export function getActorInfo(req: PrincipalCarrier) {
+  const p = getCurrentPrincipalFromCarrier(req);
   if (!p) {
     throw unauthorized();
   }
@@ -131,9 +148,23 @@ export function getActorInfo(req: Request) {
   };
 }
 
+/**
+ * Minimal interface for header access, satisfied by both Express.Request and FastifyRequest.
+ * Fastify uses `req.headers` (lowercase dict); Express also exposes `req.header(name)`.
+ * We use `req.headers` only so both frameworks satisfy this interface.
+ */
+export interface HeaderCarrier {
+  headers: Record<string, string | string[] | undefined>;
+}
+
+function getHeader(req: HeaderCarrier, name: string): string | undefined {
+  const val = req.headers[name.toLowerCase()];
+  return Array.isArray(val) ? val[0] : val;
+}
+
 /** Actor for worker-api calls: attributes actions to the agent named in the request body. */
-export function getWorkerApiActorInfo(req: Request, agentId: string) {
-  const runId = req.header("x-hive-run-id")?.trim() || null;
+export function getWorkerApiActorInfo(req: HeaderCarrier, agentId: string) {
+  const runId = getHeader(req, "x-hive-run-id")?.trim() || null;
   return {
     actorType: "agent" as const,
     actorId: agentId,

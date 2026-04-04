@@ -1,5 +1,4 @@
-import type { Request, RequestHandler } from "express";
-import type { IncomingHttpHeaders } from "node:http";
+import type { IncomingMessage, IncomingHttpHeaders } from "node:http";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { toNodeHandler } from "better-auth/node";
@@ -38,7 +37,7 @@ function headersFromNodeHeaders(rawHeaders: IncomingHttpHeaders): Headers {
   return headers;
 }
 
-function headersFromExpressRequest(req: Request): Headers {
+function headersFromNodeRequest(req: IncomingMessage): Headers {
   return headersFromNodeHeaders(req.headers);
 }
 
@@ -101,7 +100,9 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins?
   return betterAuth(authConfig) as BetterAuthInstance;
 }
 
-export function createBetterAuthHandler(auth: BetterAuthInstance): RequestHandler {
+export function createBetterAuthHandler(
+  auth: BetterAuthInstance,
+): (req: IncomingMessage, res: import("node:http").ServerResponse, next: (err?: unknown) => void) => void {
   const handler = toNodeHandler(auth);
   return (req, res, next) => {
     void Promise.resolve(handler(req, res)).catch(next);
@@ -141,7 +142,7 @@ export async function resolveBetterAuthSessionFromHeaders(
 
 export async function resolveBetterAuthSession(
   auth: BetterAuthInstance,
-  req: Request,
+  req: IncomingMessage,
 ): Promise<BetterAuthSessionResult | null> {
-  return resolveBetterAuthSessionFromHeaders(auth, headersFromExpressRequest(req));
+  return resolveBetterAuthSessionFromHeaders(auth, headersFromNodeRequest(req));
 }

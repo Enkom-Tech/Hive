@@ -1,8 +1,7 @@
-import { Router } from "express";
 import { z } from "zod";
+import type { FastifyInstance } from "fastify";
 import type { Db } from "@hive/db";
 import { pluginManifestSchema, pluginCapabilitySchema } from "@hive/plugin-sdk";
-import { validate } from "../middleware/validate.js";
 import { assertCompanyPermission, assertCompanyRead } from "./authz.js";
 import { pluginRegistryService } from "../services/plugins.js";
 
@@ -18,70 +17,55 @@ const patchBodySchema = z.object({
   capabilities: z.array(pluginCapabilitySchema).optional(),
 });
 
-export function pluginBoardRoutes(db: Db) {
-  const router = Router();
+export async function pluginBoardPlugin(fastify: FastifyInstance, opts: { db: Db }): Promise<void> {
+  const { db } = opts;
   const svc = pluginRegistryService(db);
 
-  router.get("/companies/:companyId/plugins", async (req, res, next) => {
-    try {
-      const companyId = req.params.companyId as string;
+  fastify.get<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/plugins",
+    async (req, reply) => {
+      const { companyId } = req.params;
       await assertCompanyRead(db, req, companyId);
-      const rows = await svc.listForCompany(companyId);
-      res.json(rows);
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.post("/companies/:companyId/plugins", validate(registerBodySchema), async (req, res, next) => {
-    try {
-      const companyId = req.params.companyId as string;
-      await assertCompanyPermission(db, req, companyId, "plugins:manage");
-      const body = req.body as z.infer<typeof registerBodySchema>;
-      const manifestJson = JSON.stringify(body.manifest);
-      const out = await svc.registerFromManifest({
-        companyId,
-        packageKey: body.packageKey,
-        version: body.version,
-        manifest: body.manifest,
-        manifestJson,
-        digestSha256: body.digestSha256,
-      });
-      if (!out) {
-        res.status(404).json({ error: "Company not found" });
-        return;
-      }
-      res.status(201).json(out);
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.patch(
-    "/companies/:companyId/plugins/:instanceId",
-    validate(patchBodySchema),
-    async (req, res, next) => {
-      try {
-        const companyId = req.params.companyId as string;
-        const instanceId = req.params.instanceId as string;
-        await assertCompanyPermission(db, req, companyId, "plugins:manage");
-        const body = req.body as z.infer<typeof patchBodySchema>;
-        const updated = await svc.patchInstance({
-          companyId,
-          instanceId,
-          enabled: body.enabled,
-          capabilities: body.capabilities,
-        });
-        if (!updated) {
-          res.status(404).json({ error: "Plugin instance not found" });
-          return;
-        }
-        res.json({ ok: true });
-      } catch (err) {
-        next(err);
-      }
+      return reply.send(await svc.listForCompany(companyId));
     },
   );
 
-  return router;
+  fastify.post<{ Params: { companyId: string } }>(
+    "/api/companies/:companyId/plugins",
+    async (req, reply) => {
+      const { companyId } = req.params;
+      await assertCompanyPermission(db, req, companyId, "plugins:manage");
+      const parsed = registerBodySchema.safeParse(req.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+      const manifestJson = JSON.stringify(parsed.data.manifest);
+      const out = await svc.registerFromManifest({
+        companyId,
+        packageKey: parsed.data.packageKey,
+        version: parsed.data.version,
+        manifest: parsed.data.manifest,
+        manifestJson,
+        digestSha256: parsed.data.digestSha256,
+      });
+      if (!out) return reply.status(404).send({ error: "Company not found" });
+      return reply.status(201).send(out);
+    },
+  );
+
+  fastify.patch<{ Params: { companyId: string; instanceId: string } }>(
+    "/api/companies/:companyId/plugins/:instanceId",
+    async (req, reply) => {
+      const { companyId, instanceId } = req.params;
+      await assertCompanyPermission(db, req, companyId, "plugins:manage");
+      const parsed = patchBodySchema.safeParse(req.body);
+      if (!parsed.success) return reply.status(400).send({ error: "Invalid body", details: parsed.error.issues });
+      const updated = await svc.patchInstance({
+        companyId,
+        instanceId,
+        enabled: parsed.data.enabled,
+        capabilities: parsed.data.capabilities,
+      });
+      if (!updated) return reply.status(404).send({ error: "Plugin instance not found" });
+      return reply.send({ ok: true });
+    },
+  );
 }
