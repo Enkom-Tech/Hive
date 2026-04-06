@@ -19,6 +19,12 @@ type InviteSummary = {
 type AcceptInviteInput =
   | { requestType: "human" }
   | {
+    requestType: "human";
+    name: string;
+    email: string;
+    password: string;
+  }
+  | {
     requestType: "agent";
     agentName: string;
     adapterType?: string;
@@ -91,10 +97,16 @@ export const accessApi = {
     api.get<InviteOnboardingManifest>(`/invites/${token}/onboarding`),
 
   acceptInvite: (token: string, input: AcceptInviteInput) =>
-    api.post<AgentJoinRequestAccepted | JoinRequest | { bootstrapAccepted: true; userId: string }>(
-      `/invites/${token}/accept`,
-      input,
-    ),
+    api.post<
+      | AgentJoinRequestAccepted
+      | JoinRequest
+      | {
+          bootstrapAccepted: true;
+          userId: string;
+          createdAccount?: boolean;
+          email?: string;
+        }
+    >(`/invites/${token}/accept`, input),
 
   listJoinRequests: (companyId: string, status: "pending_approval" | "approved" | "rejected" = "pending_approval") =>
     api.get<JoinRequest[]>(`/companies/${companyId}/join-requests?status=${status}`),

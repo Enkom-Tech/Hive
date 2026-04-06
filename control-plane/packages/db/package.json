@@ -25,7 +25,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc && shx cp -r src/migrations dist/migrations",
+    "build": "tsc && shx rm -rf dist/migrations && shx cp -r src/migrations dist/migrations",
     "clean": "shx rm -rf dist",
     "typecheck": "tsc --noEmit",
     "generate": "tsc -p tsconfig.json && drizzle-kit generate",

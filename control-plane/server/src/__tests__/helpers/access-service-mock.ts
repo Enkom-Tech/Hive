@@ -7,6 +7,7 @@ import { vi } from "vitest";
 vi.mock("../../services/access.js", () => {
   const impl = {
     isInstanceAdmin: vi.fn(async () => false),
+    hasHumanInstanceAdmin: vi.fn(async () => true),
     canUser: vi.fn(async () => true),
     hasPermission: vi.fn(async () => true),
     canPrincipalAssignAgent: vi.fn(async () => true),

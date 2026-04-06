@@ -6,7 +6,7 @@ import {
   companyService,
 } from "../../services/index.js";
 
-/** Options passed through from `register-main-api-routes` into company route registration. */
+/** Options passed from Fastify app setup into company route registration. */
 export type CompanyRouteOptions = {
   drainAutoEvacuateEnabled?: boolean;
   drainCancelInFlightPlacementsEnabled?: boolean;

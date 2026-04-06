@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
+import { Link, Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
@@ -49,8 +49,12 @@ function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: b
       <div className="rounded-lg border border-border bg-card p-6">
         <h1 className="text-xl font-semibold">Instance setup required</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          No instance admin exists yet. Run this command in your Hive environment to generate
-          the first admin invite URL:
+          No instance admin exists yet. You can create the first account from{" "}
+          <Link to="/auth" className="font-medium text-foreground underline underline-offset-2">
+            Sign in
+          </Link>{" "}
+          (registration stays open until someone becomes admin), or run this in your Hive environment to mint a
+          one-time bootstrap invite URL:
         </p>
         <pre className="mt-4 overflow-x-auto rounded-md border border-border bg-muted/30 p-3 text-xs">
 {`pnpm hive auth bootstrap-ceo`}

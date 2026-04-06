@@ -1,0 +1,26 @@
+{
+  "$meta": {
+    "version": 1,
+    "updatedAt": "2026-04-04T19:10:00.000Z",
+    "source": "configure"
+  },
+  "database": {
+    "mode": "postgres",
+    "connectionString": "postgres://hive:hive@db:5432/hive"
+  },
+  "logging": {
+    "mode": "file",
+    "logDir": "/hive/instances/default/logs"
+  },
+  "server": {
+    "deploymentMode": "authenticated",
+    "exposure": "private",
+    "host": "0.0.0.0",
+    "port": 3100,
+    "serveUi": true
+  },
+  "auth": {
+    "baseUrlMode": "auto",
+    "disableSignUp": false
+  }
+}

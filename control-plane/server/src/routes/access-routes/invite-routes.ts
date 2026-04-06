@@ -1,13 +1,16 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNull } from "drizzle-orm";
+import { hashPassword } from "better-auth/crypto";
+import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@hive/db";
-import { invites, joinRequests } from "@hive/db";
+import { authAccounts, authUsers, instanceUserRoles, invites, joinRequests } from "@hive/db";
 import {
   acceptInviteSchema,
   createCompanyInviteSchema,
   inviteTestResolutionQuerySchema,
 } from "@hive/shared";
 import type { DeploymentExposure, DeploymentMode } from "@hive/shared";
+import { LOCAL_BOARD_USER_ID } from "../../board-claim.js";
 import {
   conflict,
   notFound,
@@ -177,13 +180,157 @@ export function registerInviteRoutesF(fastify: FastifyInstance, deps: InviteRout
     if (invite.inviteType === "bootstrap_ceo") {
       if (inviteAlreadyAccepted) throw notFound("Invite not found");
       if (body.requestType !== "human") throw badRequest("Bootstrap invite requires human request type");
-      const isBoard = p?.type === "user" || p?.type === "system";
-      if (!isBoard || (!p?.id && !isLocalImplicitF(req))) throw unauthorized("Authenticated user required for bootstrap acceptance");
-      const userId = p?.id ?? "local-board";
-      const existingAdmin = await access.isInstanceAdmin(userId);
-      if (!existingAdmin) await access.promoteInstanceAdmin(userId);
-      const updatedInvite = await db.update(invites).set({ acceptedAt: new Date(), updatedAt: new Date() }).where(eq(invites.id, invite.id)).returning().then((rows) => rows[0] ?? invite);
-      return reply.status(202).send({ inviteId: updatedInvite.id, inviteType: updatedInvite.inviteType, bootstrapAccepted: true, userId });
+
+      const hasHumanAdmin = await access.hasHumanInstanceAdmin();
+
+      if (p?.type === "user" && p.id) {
+        const userId = p.id;
+        const existingAdmin = await access.isInstanceAdmin(userId);
+        if (!existingAdmin) await access.promoteInstanceAdmin(userId);
+        const updatedInvite = await db
+          .update(invites)
+          .set({ acceptedAt: new Date(), updatedAt: new Date() })
+          .where(eq(invites.id, invite.id))
+          .returning()
+          .then((rows) => rows[0] ?? invite);
+        return reply.status(202).send({
+          inviteId: updatedInvite.id,
+          inviteType: updatedInvite.inviteType,
+          bootstrapAccepted: true,
+          userId,
+          createdAccount: false,
+        });
+      }
+
+      if (isLocalImplicitF(req)) {
+        const userId = "local-board";
+        const existingAdmin = await access.isInstanceAdmin(userId);
+        if (!existingAdmin) await access.promoteInstanceAdmin(userId);
+        const updatedInvite = await db
+          .update(invites)
+          .set({ acceptedAt: new Date(), updatedAt: new Date() })
+          .where(eq(invites.id, invite.id))
+          .returning()
+          .then((rows) => rows[0] ?? invite);
+        return reply.status(202).send({
+          inviteId: updatedInvite.id,
+          inviteType: updatedInvite.inviteType,
+          bootstrapAccepted: true,
+          userId,
+          createdAccount: false,
+        });
+      }
+
+      if (opts.deploymentMode !== "authenticated") {
+        throw unauthorized("Authenticated user required for bootstrap acceptance");
+      }
+
+      if (hasHumanAdmin) {
+        throw unauthorized(
+          "Sign in with an existing account to accept this invite. If you need a new account, ask an instance admin.",
+        );
+      }
+
+      const rawName = typeof body.name === "string" ? body.name.trim() : "";
+      const rawEmail = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      const rawPassword = typeof body.password === "string" ? body.password : "";
+      if (!rawName || !rawEmail || !rawPassword) {
+        throw badRequest("Provide name, email, and password to create the first admin account.");
+      }
+
+      const userId = randomUUID();
+      const accountId = randomUUID();
+      const now = new Date();
+      const passwordHash = await hashPassword(rawPassword);
+
+      const updatedInvite = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(582947123, 1)`);
+
+        const inviteRow = await tx
+          .select()
+          .from(invites)
+          .where(eq(invites.id, invite.id))
+          .then((rows) => rows[0] ?? null);
+        if (!inviteRow || inviteRow.revokedAt || inviteExpired(inviteRow) || inviteRow.acceptedAt) {
+          throw notFound("Invite not found");
+        }
+
+        const adminRow = await tx
+          .select({ id: instanceUserRoles.id })
+          .from(instanceUserRoles)
+          .where(
+            and(eq(instanceUserRoles.role, "instance_admin"), ne(instanceUserRoles.userId, LOCAL_BOARD_USER_ID)),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (adminRow) {
+          throw unauthorized(
+            "Sign in with an existing account to accept this invite. If you need a new account, ask an instance admin.",
+          );
+        }
+
+        const userCount = await tx
+          .select({ c: count() })
+          .from(authUsers)
+          .then((rows) => Number(rows[0]?.c ?? 0));
+        if (userCount > 0) {
+          throw conflict("An account already exists. Sign in to accept the bootstrap invite.");
+        }
+
+        const existingEmail = await tx
+          .select({ id: authUsers.id })
+          .from(authUsers)
+          .where(eq(authUsers.email, rawEmail))
+          .then((rows) => rows[0] ?? null);
+        if (existingEmail) {
+          throw conflict("A user with this email already exists");
+        }
+
+        await tx.insert(authUsers).values({
+          id: userId,
+          name: rawName,
+          email: rawEmail,
+          emailVerified: true,
+          image: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await tx.insert(authAccounts).values({
+          id: accountId,
+          accountId: rawEmail,
+          providerId: "credential",
+          userId,
+          accessToken: null,
+          refreshToken: null,
+          idToken: null,
+          accessTokenExpiresAt: null,
+          refreshTokenExpiresAt: null,
+          scope: null,
+          password: passwordHash,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await tx.insert(instanceUserRoles).values({
+          userId,
+          role: "instance_admin",
+        });
+
+        return tx
+          .update(invites)
+          .set({ acceptedAt: now, updatedAt: now })
+          .where(eq(invites.id, invite.id))
+          .returning()
+          .then((rows) => rows[0] ?? inviteRow);
+      });
+
+      return reply.status(202).send({
+        inviteId: updatedInvite.id,
+        inviteType: updatedInvite.inviteType,
+        bootstrapAccepted: true,
+        userId,
+        createdAccount: true,
+        email: rawEmail,
+      });
     }
 
     const requestType = body.requestType as "human" | "agent";

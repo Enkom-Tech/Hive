@@ -27,6 +27,8 @@ services:
       HIVE_DEPLOYMENT_EXPOSURE: "private"
       HIVE_PUBLIC_URL: "${HIVE_PUBLIC_URL:-http://localhost:3100}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      # Non-interactive Compose: apply pending DB migrations on every server start.
+      HIVE_MIGRATION_AUTO_APPLY: "true"
     volumes:
       - hive-data:/hive
     depends_on:

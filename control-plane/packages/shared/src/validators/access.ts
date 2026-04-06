@@ -14,19 +14,37 @@ export const createCompanyInviteSchema = z.object({
 
 export type CreateCompanyInvite = z.infer<typeof createCompanyInviteSchema>;
 
-export const acceptInviteSchema = z.object({
-  requestType: z.enum(JOIN_REQUEST_TYPES),
-  agentName: z.string().min(1).max(120).optional(),
-  adapterType: z.string().min(1).max(64).optional(),
-  capabilities: z.string().max(4000).optional().nullable(),
-  agentDefaultsPayload: z.record(z.string(), z.unknown()).optional().nullable(),
-  // OpenClaw join compatibility fields accepted at top level.
-  responsesWebhookUrl: z.string().max(4000).optional().nullable(),
-  responsesWebhookMethod: z.string().max(32).optional().nullable(),
-  responsesWebhookHeaders: z.record(z.string(), z.unknown()).optional().nullable(),
-  hiveApiUrl: z.string().max(4000).optional().nullable(),
-  webhookAuthHeader: z.string().max(4000).optional().nullable(),
-});
+export const acceptInviteSchema = z
+  .object({
+    requestType: z.enum(JOIN_REQUEST_TYPES),
+    agentName: z.string().min(1).max(120).optional(),
+    adapterType: z.string().min(1).max(64).optional(),
+    capabilities: z.string().max(4000).optional().nullable(),
+    agentDefaultsPayload: z.record(z.string(), z.unknown()).optional().nullable(),
+    // OpenClaw join compatibility fields accepted at top level.
+    responsesWebhookUrl: z.string().max(4000).optional().nullable(),
+    responsesWebhookMethod: z.string().max(32).optional().nullable(),
+    responsesWebhookHeaders: z.record(z.string(), z.unknown()).optional().nullable(),
+    hiveApiUrl: z.string().max(4000).optional().nullable(),
+    webhookAuthHeader: z.string().max(4000).optional().nullable(),
+    /** When accepting a bootstrap_ceo invite with no session (first admin only). */
+    name: z.string().min(1).max(200).trim().optional(),
+    email: z.string().email().optional(),
+    password: z.string().min(8).max(256).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasAny = data.name !== undefined || data.email !== undefined || data.password !== undefined;
+    if (!hasAny) return;
+    if (!data.name?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "name is required", path: ["name"] });
+    }
+    if (!data.email?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "email is required", path: ["email"] });
+    }
+    if (!data.password) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "password is required", path: ["password"] });
+    }
+  });
 
 export type AcceptInvite = z.infer<typeof acceptInviteSchema>;
 

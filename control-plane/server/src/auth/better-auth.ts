@@ -41,6 +41,25 @@ function headersFromNodeRequest(req: IncomingMessage): Headers {
   return headersFromNodeHeaders(req.headers);
 }
 
+function addLoopbackOriginAliases(origins: Set<string>): void {
+  const extras: string[] = [];
+  for (const origin of origins) {
+    try {
+      const u = new URL(origin);
+      if (u.hostname === "localhost") {
+        u.hostname = "127.0.0.1";
+        extras.push(u.origin);
+      } else if (u.hostname === "127.0.0.1") {
+        u.hostname = "localhost";
+        extras.push(u.origin);
+      }
+    } catch {
+      // ignore non-URL entries
+    }
+  }
+  for (const o of extras) origins.add(o);
+}
+
 export function deriveAuthTrustedOrigins(config: Config): string[] {
   const baseUrl = config.authBaseUrlMode === "explicit" ? config.authPublicBaseUrl : undefined;
   const trustedOrigins = new Set<string>();
@@ -59,7 +78,17 @@ export function deriveAuthTrustedOrigins(config: Config): string[] {
       trustedOrigins.add(`https://${trimmed}`);
       trustedOrigins.add(`http://${trimmed}`);
     }
+    // Hive config defaults `allowedHostnames` to []. With no explicit authPublicBaseUrl,
+    // that yields an empty trustedOrigins list and Better Auth rejects browser requests,
+    // so session cookies never stick and /api/auth/get-session + board APIs return 401/403.
+    if (config.allowedHostnames.length === 0 && !config.authPublicBaseUrl?.trim()) {
+      const port = config.port;
+      trustedOrigins.add(`http://127.0.0.1:${port}`);
+      trustedOrigins.add(`http://localhost:${port}`);
+    }
   }
+
+  addLoopbackOriginAliases(trustedOrigins);
 
   return Array.from(trustedOrigins);
 }

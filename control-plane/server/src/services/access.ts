@@ -207,6 +207,19 @@ export function accessService(db: Db) {
       .then((rows) => rows[0]);
   }
 
+  /** True when some real user (not local-board) is already instance_admin. */
+  async function hasHumanInstanceAdmin(): Promise<boolean> {
+    const row = await db
+      .select({ id: instanceUserRoles.id })
+      .from(instanceUserRoles)
+      .where(
+        and(eq(instanceUserRoles.role, "instance_admin"), ne(instanceUserRoles.userId, LOCAL_BOARD_USER_ID)),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return Boolean(row);
+  }
+
   /** If the instance has no instance_admin yet, promote this user (first self-serve signup). */
   async function promoteFirstInstanceAdminIfVacant(userId: string) {
     await db.transaction(async (tx) => {
@@ -377,6 +390,7 @@ export function accessService(db: Db) {
 
   return {
     isInstanceAdmin,
+    hasHumanInstanceAdmin,
     canUser,
     hasPermission,
     canPrincipalAssignAgent,

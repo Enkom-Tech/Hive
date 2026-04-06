@@ -156,7 +156,7 @@ export function printStartupBanner(opts: StartupBannerOptions): void {
     row("Deploy", `${opts.deploymentMode} (${opts.deploymentExposure})`),
     row("Auth", opts.authReady ? color("ready", "green") : color("not-ready", "yellow")),
     row("Server", portValue),
-    row("API", `${apiUrl} ${color(`(health: ${apiUrl}/health)`, "dim")}`),
+    row("API", `${apiUrl} ${color(`(health: ${apiUrl}/api/health)`, "dim")}`),
     row("UI", uiUrl),
     row("Database", dbDetails),
     row("Migrations", opts.migrationSummary),

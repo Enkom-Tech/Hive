@@ -36,6 +36,9 @@ export function InviteLandingPage() {
   const [agentName, setAgentName] = useState("");
   const [adapterType, setAdapterType] = useState<string>("managed_worker");
   const [capabilities, setCapabilities] = useState("");
+  const [bootstrapName, setBootstrapName] = useState("");
+  const [bootstrapEmail, setBootstrapEmail] = useState("");
+  const [bootstrapPassword, setBootstrapPassword] = useState("");
   const [result, setResult] = useState<{ kind: "bootstrap" | "join"; payload: unknown } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,16 +73,41 @@ export function InviteLandingPage() {
     }
   }, [availableJoinTypes, joinType]);
 
+  const bootstrapPending = healthQuery.data?.bootstrapStatus === "bootstrap_pending";
+
+  const allowAnonymousBootstrap =
+    invite?.inviteType === "bootstrap_ceo" &&
+    healthQuery.data?.deploymentMode === "authenticated" &&
+    bootstrapPending === true &&
+    !sessionQuery.data;
+
   const requiresAuthForHuman =
     joinType === "human" &&
     healthQuery.data?.deploymentMode === "authenticated" &&
-    !sessionQuery.data;
+    !sessionQuery.data &&
+    !allowAnonymousBootstrap;
+
+  const anonymousBootstrapFormValid =
+    bootstrapName.trim().length > 0 &&
+    bootstrapEmail.trim().length > 0 &&
+    bootstrapPassword.length >= 8;
 
   const acceptMutation = useMutation({
     mutationFn: async () => {
       if (!invite) throw new Error("Invite not found");
       if (invite.inviteType === "bootstrap_ceo") {
-        return accessApi.acceptInvite(token, { requestType: "human" });
+        if (sessionQuery.data) {
+          return accessApi.acceptInvite(token, { requestType: "human" });
+        }
+        if (healthQuery.data?.bootstrapStatus === "bootstrap_pending") {
+          return accessApi.acceptInvite(token, {
+            requestType: "human",
+            name: bootstrapName.trim(),
+            email: bootstrapEmail.trim(),
+            password: bootstrapPassword,
+          });
+        }
+        throw new Error("Sign in to accept this invite.");
       }
       if (joinType === "human") {
         return accessApi.acceptInvite(token, { requestType: "human" });
@@ -134,16 +162,31 @@ export function InviteLandingPage() {
   }
 
   if (result?.kind === "bootstrap") {
+    const payload = result.payload as Record<string, unknown> | null;
+    const createdAccount = payload?.createdAccount === true;
     return (
       <div className="mx-auto max-w-xl py-10">
         <div className="rounded-lg border border-border bg-card p-6">
           <h1 className="text-lg font-semibold">Bootstrap complete</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            The first instance admin is now configured. You can continue to the board.
-          </p>
-          <Button asChild className="mt-4">
-            <Link to="/">Open board</Link>
-          </Button>
+          {createdAccount ? (
+            <>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Your admin account is ready. Sign in with the email and password you chose to open the board.
+              </p>
+              <Button asChild className="mt-4">
+                <Link to="/auth">Sign in</Link>
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-muted-foreground">
+                The first instance admin is now configured. You can continue to the board.
+              </p>
+              <Button asChild className="mt-4">
+                <Link to="/">Open board</Link>
+              </Button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -274,12 +317,51 @@ export function InviteLandingPage() {
           </div>
         )}
 
+        {invite.inviteType === "bootstrap_ceo" && allowAnonymousBootstrap && (
+          <div className="mt-5 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Create the first admin account for this instance. You can also register from the sign-in page while no admin
+              exists; this form ties acceptance of this invite to that account.
+            </p>
+            <label className="block text-sm">
+              <span className="mb-1 block text-muted-foreground">Name</span>
+              <input
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                value={bootstrapName}
+                onChange={(e) => setBootstrapName(e.target.value)}
+                autoComplete="name"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-muted-foreground">Email</span>
+              <input
+                type="email"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                value={bootstrapEmail}
+                onChange={(e) => setBootstrapEmail(e.target.value)}
+                autoComplete="email"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-muted-foreground">Password (at least 8 characters)</span>
+              <input
+                type="password"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                value={bootstrapPassword}
+                onChange={(e) => setBootstrapPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+          </div>
+        )}
+
         {requiresAuthForHuman && (
           <div className="mt-4 rounded-md border border-border bg-muted/30 p-3 text-sm">
-            Sign in or create an account before submitting a human join request.
+            Sign in before accepting this invite. If this instance has no admin yet, open the sign-in page and use Create
+            account, or complete the form above when you opened a bootstrap invite link.
             <div className="mt-2">
               <Button asChild size="sm" variant="outline">
-                <Link to={`/auth?next=${encodeURIComponent(`/invite/${token}`)}`}>Sign in / Create account</Link>
+                <Link to={`/auth?next=${encodeURIComponent(`/invite/${token}`)}`}>Sign in</Link>
               </Button>
             </div>
           </div>
@@ -292,7 +374,8 @@ export function InviteLandingPage() {
           disabled={
             acceptMutation.isPending ||
             (joinType === "agent" && invite.inviteType !== "bootstrap_ceo" && agentName.trim().length === 0) ||
-            requiresAuthForHuman
+            requiresAuthForHuman ||
+            (allowAnonymousBootstrap && !anonymousBootstrapFormValid)
           }
           onClick={() => acceptMutation.mutate()}
         >

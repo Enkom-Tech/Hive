@@ -260,9 +260,9 @@ async function apiNotFoundHandler(req: FastifyRequest, reply: FastifyReply) {
 export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<FastifyInstance> {
   initPlacementPrometheus(opts.metricsEnabled);
 
-  // Fastify uses pino natively; we pass our configured logger instance.
+  // Fastify 5: `logger` is only for pino config objects; custom instances use `loggerInstance`.
   const fastify = Fastify({
-    logger,
+    loggerInstance: logger,
     disableRequestLogging: false,
     trustProxy: true,
   });
@@ -484,13 +484,12 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
     }
   });
 
-  // ── GET /api/auth/get-session ─────────────────────────────────────────────
-  fastify.get("/api/auth/get-session", async (req, reply) => {
+  // ── GET /api/auth/get-session (board JWT envelope; not Better Auth's session JSON) ──
+  const boardGetSessionHandler = async (req: FastifyRequest, reply: FastifyReply) => {
     const principal = getCurrentPrincipalFastify(req);
     const isBoard = principal?.type === "user" || principal?.type === "system";
     if (!isBoard || !principal?.id) {
-      void reply.status(401).send({ error: "Unauthorized" });
-      return;
+      return reply.status(401).send({ error: "Unauthorized" });
     }
     const isLocalBoard = principal.id === LOCAL_BOARD_USER_ID || principal.type === "system";
     const payload: Record<string, unknown> = {
@@ -512,8 +511,14 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
       );
       if (accessToken) payload.accessToken = accessToken;
     }
-    void reply.send(payload);
-  });
+    return reply.send(payload);
+  };
+
+  // When Better Auth is on, `GET /api/auth/get-session` must not also hit `all("/api/auth/*")`
+  // (both match and the second handler throws ERR_HTTP_HEADERS_SENT).
+  if (!opts.betterAuthInstance) {
+    fastify.get("/api/auth/get-session", boardGetSessionHandler);
+  }
 
   // ── Better Auth ───────────────────────────────────────────────────────────
   if (opts.betterAuthInstance) {
@@ -533,7 +538,7 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
         .then((rows) => Number(rows[0]?.c ?? 0));
       const signUpDisabled = opts.authDisableSignUp || userCount > 0;
       if (signUpDisabled) {
-        void reply.status(403).send({ message: "Sign up is disabled" });
+        return reply.status(403).send({ message: "Sign up is disabled" });
       }
     });
 
@@ -542,6 +547,11 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
     // IncomingMessage so Better Auth receives the original body bytes
     // regardless of content-type (JSON, form, multipart).
     fastify.all("/api/auth/*", { config: { rawBody: true } }, async (req, reply) => {
+      const pathNoQuery = (req.url.split("?")[0] ?? "").replace(/\/+$/, "") || "/";
+      if (req.method === "GET" && pathNoQuery === "/api/auth/get-session") {
+        return boardGetSessionHandler(req, reply);
+      }
+
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
         if (!value) continue;
@@ -587,7 +597,7 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
       }
 
       const body = await response.text();
-      void reply.send(body);
+      return reply.send(body);
     });
   }
 
@@ -860,7 +870,7 @@ export async function createFastifyApp(db: Db, opts: CreateAppOpts): Promise<Fas
 
   startPluginSupervisorRuntime();
 
-  return fastify;
+  return fastify as unknown as FastifyInstance;
 }
 
 /**

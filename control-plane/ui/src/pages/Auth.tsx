@@ -28,6 +28,8 @@ export function AuthPage() {
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
     retry: false,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
   const signUpDisabled = healthQuery.data?.auth?.signUpDisabled ?? false;
 
@@ -164,7 +166,14 @@ export function AuthPage() {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 autoComplete={mode === "sign_in" ? "current-password" : "new-password"}
+                minLength={8}
               />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Minimum 8 characters.
+                {mode === "sign_up"
+                  ? " Add your name, email, and password before Create Account enables."
+                  : " Add email and password before Sign In enables."}
+              </p>
             </div>
             {error && <p className="text-xs text-destructive whitespace-pre-line">{error}</p>}
             <Button type="submit" disabled={!canSubmit || mutation.isPending} className="w-full">
