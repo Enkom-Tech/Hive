@@ -9,7 +9,7 @@
 # -----------------------------------------------------------------------------
 fastapi>=0.115.0,<0.136.0
 # Plain uvicorn: [standard] extra brings uvloop without == pins and breaks `pip install -r *.lock` with --require-hashes.
-uvicorn>=0.30.0,<0.43.0
+uvicorn>=0.30.0,<0.45.0
 
 # -----------------------------------------------------------------------------
 # Vector Database (embedded mode — no lancedb-cloud needed)
