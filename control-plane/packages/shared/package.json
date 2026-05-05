@@ -31,12 +31,12 @@
     "generate:env-example": "tsx scripts/generate-env-example.ts"
   },
   "dependencies": {
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
+    "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   }
 }
